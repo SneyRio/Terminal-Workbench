@@ -1,0 +1,17 @@
+{
+  "passed": true,
+  "packaged": true,
+  "checks": [
+    "menu expanded state, toggle, content/header outside click and Escape dismissal",
+    "SessionStart marks a new ready CLI idle before any model turn",
+    "blank session preview/cancel/commit starts target with preserved cwd and no false recovery claim",
+    "fresh hook check blocks active turns and stale blank previews",
+    "successful switches remove source records and retain original transcript/checkpoint",
+    "sidebar deletion supports cancel and removes selected live session",
+    "active deletion ends only selected PTY and preserves projects and original CLI records",
+    "history deletion removes records and returns active view to empty workspace",
+    "failed target startup preserves source record for recovery instead of deleting it",
+    "restart removes completed legacy sources and retains failed-switch sources"
+  ],
+  "errors": []
+}

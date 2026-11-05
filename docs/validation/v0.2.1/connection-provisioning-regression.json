@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "checks": [
+    "composite tool selector has one focus border enclosing its icon and field",
+    "official create-and-login automatically provisions an executable isolated launcher, clears gateway auth and uses system default browser command",
+    "custom form persists provider, model list and default while storing credentials only as encrypted owner-readable bytes",
+    "custom session launches with its own endpoint, default model, exact credential and config directory without inheriting another account",
+    "model service editing preserves a blank credential and leaves the running session intact",
+    "failed configuration persistence retains the previous config and encrypted credential and removes the uncommitted new key",
+    "credential rotation supports x-api-key, validates endpoints and does not publish secrets into renderer state",
+    "restart decrypts the rotated key and starts future sessions using the edited model and authentication scheme"
+  ],
+  "packaged": true,
+  "modelPrompts": 0
+}

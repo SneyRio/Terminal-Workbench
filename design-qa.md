@@ -52,3 +52,10 @@
 浅灰、深色、960px 最小窗口截图与交互测试通过；文字和工具图标存在轻微密度差异，不影响所选卡片结构及操作。永久删除有原生确认，恢复与切换失败保留来源。无阻断视觉问题。
 
 final result: passed
+
+
+## 0.2.1 添加连接与焦点样式
+
+已核对 [筛选框焦点](docs/screenshots/connection-focus-fixed.png)：单个外框完整包裹图标和文字，内层 select 不再单独描边。[自定义供应商表单](docs/screenshots/custom-provider-form.png) 的字段、模型选择和主次操作清晰，密钥为密码输入，文本区已统一主题；去除重复页脚后，1024 高窗口完整显示表单。低高度窗口保留滚动。新增配置不把本地检查表述为真实推理成功。
+
+final result: passed

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, safeStorage } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { existsSync } = require('node:fs');
@@ -18,12 +18,14 @@ const {configuredStatusLine}=require('./statusline.cjs');
 const {DraftBatch,TerminalHistory,appendTerminal,flushTerminal}=require('./performance.cjs');
 const { Store, atomicJson, id, inside, cleanEnv, buildHandoff } = require('./core.cjs');
 const exec = promisify(execFile);
+const {Connections,connection}=require('./account-connections.cjs');
 const root = path.resolve(__dirname, '..');
 app.setName('终端工作站');
 const legacyDataRoot=path.join(app.getPath('appData'),'Claude Accountor');
 const dataRoot = process.env.ACCOUNTOR_DATA_DIR || (app.isPackaged ? (existsSync(path.join(legacyDataRoot,'state.json'))?legacyDataRoot:path.join(app.getPath('appData'),'Terminal Workbench')) : path.join(root, '.local-app-data'));
 app.setPath('userData', dataRoot);
 const store = new Store(dataRoot);
+const connections=new Connections(dataRoot,safeStorage);
 const terminals = new Map();
 let win, quitting = false;
 const notify = (channel, payload) => { if (win && !win.isDestroyed()) win.webContents.send(channel, payload); };
@@ -64,15 +66,18 @@ async function installTelemetry(accountId) {
   return settings;
 }
 
-const statusChecks = new Map();
+const statusChecks = new Map(),configuringAccounts=new Set();
 function statusAccount(accountId) {
   if(statusChecks.has(accountId))return statusChecks.get(accountId);
   const check=checkAccount(accountId).finally(()=>statusChecks.delete(accountId));
   statusChecks.set(accountId,check);return check;
 }
 async function checkAccount(accountId) {
+  if(configuringAccounts.has(accountId))throw new Error('连接配置正在保存，请稍后重试');
   requireTool(store.account(accountId).agentToolId);
   try {
+    const account=store.account(accountId);
+    if(account.connection){await connections.env(account);await accountExecutable(account);await store.update(s=>Object.assign(s.accounts.find(a=>a.id===accountId),{status:'valid',authMethod:'custom-config',checkedAt:Date.now(),error:''}));pushState();return store.account(accountId);}
     const { stdout } = await exec(await accountExecutable(store.account(accountId)), ['auth', 'status', '--json'], { env: cliEnv(accountDir(accountId)), timeout: 15000, maxBuffer: 256 * 1024 });
     const data = JSON.parse(stdout);
     if(typeof data.loggedIn!=='boolean')throw new Error('Invalid auth status');
@@ -126,7 +131,7 @@ async function startSession(input) {
   if (!cwd || !(await fs.stat(cwd)).isDirectory()) throw new Error('主项目根目录不可用');
   const sessionId = id();
   const metadataPath = path.join(telemetryDir, sessionId + '-event.json');
-  const env = cliEnv(acct ? accountDir(acct.id) : null);
+  const env = {...cliEnv(acct ? accountDir(acct.id) : null),...(acct?await connections.env(acct):{})};
   // Login must use the user's macOS default browser, never an embedded webview or a named browser.
   if(process.platform==='darwin')env.BROWSER='/usr/bin/open';
   env.PATH = [path.join(os.homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', process.env.PATH].filter(Boolean).join(path.delimiter);
@@ -137,6 +142,7 @@ async function startSession(input) {
     const telemetry = [argvString(process.execPath), argvString(path.join(root, 'scripts/claude-telemetry.cjs'))].join(' ');
     env.ELECTRON_RUN_AS_NODE = '1';
     env.ACCOUNTOR_RUN_ID = sessionId; env.ACCOUNTOR_TELEMETRY_DIR = telemetryDir;
+    if(kind==='login'&&acct.provider==='custom')throw new Error('自定义供应商使用 API Key / Token，请在连接详情中编辑');
     if (kind === 'login') args = ['--settings',JSON.stringify({env:{BROWSER:'/usr/bin/open'}}),'auth', 'login', '--claudeai'];
     else {
       const settings = { hooks: {},...(backend==='embedded'?{tui:store.state.settings.terminalRenderer==='fullscreen'?'fullscreen':'default'}:{}),env:{...(backend==='embedded'&&store.state.settings.terminalRenderer!=='fullscreen'?{CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN:'1'}:{}),BROWSER:'/usr/bin/open',...(acct.command==='claude-dp'?{ENABLE_TOOL_SEARCH:'false'}:{})} };
@@ -144,6 +150,7 @@ async function startSession(input) {
       const originalStatusLine=await configuredStatusLine(accountDir(acct.id));
       settings.statusLine = {...(originalStatusLine||{}),type:'command',command:telemetry+' usage'+(originalStatusLine?' --delegate '+argvString(originalStatusLine.command):'')};
       args = ['--settings', JSON.stringify(settings)];
+      if(acct.connection)args.push('--model',acct.connection.defaultModel);
       const extra = [];
       for (const project of projects.slice(1)) {
         try { extra.push(await fs.realpath(project.path)); } catch { throw new Error('附加项目不可访问：' + project.path); }
@@ -333,11 +340,29 @@ function registerHandlers() {
     if (store.state.sessions.some(s => s.workspaceId === wid && terminals.get(s.id) && ['running','busy','idle','starting'].includes(s.status))) throw new Error('请先结束该工作空间的运行中终端');
     await store.update(s => { s.workspaces = s.workspaces.filter(w => w.id !== wid); if (s.selectedWorkspace === wid) s.selectedWorkspace = s.workspaces[0]?.id || ''; }); pushState();
   });
-  register('account:add', async name => {
-    if (!name?.trim()) throw new Error('请输入账号别名');
-    const account = { agentToolId:'claude-code',id: id(), name: name.trim().slice(0,80), status: 'login', email: '', createdAt: Date.now(), usage: null };
-    await fs.mkdir(accountDir(account.id), { recursive: true, mode: 0o700 });
-    await store.update(s => { s.accounts.push(account); }); pushState(); return account;
+  register('account:add', async input => {
+    const spec=typeof input==='string'?{name:input}:input;
+    if (!spec||typeof spec.name!=='string'||!spec.name.trim()) throw new Error('请输入账号别名');
+    const custom=spec.provider==='custom';
+    if(spec.provider&&!['subscription','custom'].includes(spec.provider))throw new Error('不支持的账号类型');
+    const account = {agentToolId:'claude-code',id:id(),name:spec.name.trim().slice(0,80),source:'managed',provider:custom?'custom':'subscription',status:custom?'unknown':'login',email:'',createdAt:Date.now(),usage:null};
+    if(custom){account.connection=connection(spec);account.keyVersion=id();}
+    try{await connections.provision(account,await executable());if(custom)await connections.writeKey(account.id,spec.apiKey,account.keyVersion);await store.update(s=>s.accounts.push(account));}
+    catch(e){await connections.cleanup(account).catch(()=>{});throw e;}
+    pushState();return account;
+  });
+  register('account:configure',async(accountId,input)=>{
+    const account=store.account(accountId);if(!account.connection)throw new Error('现有脚本引用由原配置管理，请新建自定义连接');
+    const config=connection(input);
+    if(configuringAccounts.has(accountId))throw new Error('连接配置正在保存，请稍后重试');
+    configuringAccounts.add(accountId);
+    try{
+    // Versioned encrypted files let in-flight launches keep their original config/key pair.
+    const keyVersion=input.apiKey?id():account.keyVersion;
+    try{if(input.apiKey)await connections.writeKey(accountId,input.apiKey,keyVersion);await store.update(s=>{const a=s.accounts.find(a=>a.id===accountId);if(!a)throw new Error('连接已被移除');Object.assign(a,{connection:config,keyVersion,status:'unknown',checkedAt:undefined,error:'',usage:null});});}
+    catch(e){if(input.apiKey)await fs.rm(connections.secret(accountId,keyVersion),{force:true});throw e;}
+    pushState();return store.account(accountId);
+    }finally{configuringAccounts.delete(accountId);}
   });
   register('account:status', statusAccount);
   register('account:rename',async(accountId,name)=>{store.account(accountId);if(!name?.trim())throw new Error('账号别名不能为空');await store.update(s=>{s.accounts.find(a=>a.id===accountId).name=name.trim().slice(0,80);});pushState();});
@@ -443,7 +468,7 @@ function registerHandlers() {
     if(!source||source.kind!=='claude'||!['idle','exited'].includes(source.status))throw new Error('请等待当前 Claude 回合结束后再切换');
     if(await sourceIsEmpty(source))return {mode:'empty',nativeSupported:false,eventTime:source.eventTime,sourceName:store.account(source.accountId).name,targetName:target.name};
     const file=await sourceTranscript(source),bundle=await sourceHandoff(source,file);
-    const handoff=target.command==='claude-dp'||!!source.handoffFile;
+    const handoff=(target.command==='claude-dp'||!!target.connection)||!!source.handoffFile;
     return {...bundle,eventTime:source.eventTime,mode:handoff?'handoff':'resume',nativeSupported:!handoff,sourceName:store.account(source.accountId).name,targetName:target.name};
   });
   register('terminal:handoff',async sid=>{const r=store.state.sessions.find(s=>s.id===sid);if(!r?.handoffFile||!inside(path.join(dataRoot,'handoffs'),r.handoffFile))throw new Error('没有可查看的交接资料');return fs.readFile(r.handoffFile,'utf8');});
@@ -459,9 +484,9 @@ function registerHandlers() {
     const empty=await sourceIsEmpty(source);
     const transcript = empty?null:await sourceTranscript(source);
     const target=store.account(targetAccountId);
-    const mode=options.mode || (empty?'empty':target.command==='claude-dp'||source.handoffFile?'handoff':'resume');
+    const mode=options.mode || (empty?'empty':target.command==='claude-dp'||target.connection||source.handoffFile?'handoff':'resume');
     if(!['empty','resume','handoff'].includes(mode)||((mode==='empty')!==empty))throw new Error('会话内容已变化，请重新预览后切换');
-    if(mode==='resume'&&target.command==='claude-dp')throw new Error('该 DP 入口不接受当前原生历史格式，请使用上下文交接');
+    if(mode==='resume'&&(target.command==='claude-dp'||target.connection))throw new Error('此自定义供应商请使用上下文交接，不能直接导入当前原生工具历史');
     const confirmed = options.reviewed ? {response:1} : await dialog.showMessageBox(win, { message:'切换此会话的账号？', detail:empty?'当前尚无对话记录，将保留工作目录与项目设置，以目标账号新建空白会话。':mode==='handoff'?'将保留原始会话并创建携带交接资料的新会话，不迁移原生工具运行状态。':'将保存原始会话快照并结束源 CLI，再用目标账号恢复一个分支。原始记录始终保留。', buttons:['取消',empty?'切换账号':'保存检查点并切换'], defaultId:0, cancelId:0 });
     if (confirmed.response !== 1) return null;
     const checkpoint = empty?undefined:path.join(dataRoot, 'checkpoints', id() + '.jsonl');
@@ -531,7 +556,7 @@ function registerHandlers() {
     await store.update(s=>s.settings.background=file); pushState();
   });
   register('settings:background-data', async () => { const file=store.state.settings.background; if(!file)return ''; try { const ext=path.extname(file); return `data:image/${['.jpg','.jpeg'].includes(ext)?'jpeg':ext.slice(1)};base64,${(await fs.readFile(file)).toString('base64')}`; } catch { return ''; } });
-  register('system:info', async () => ({ tools:agentTools,plannedTools,platform:process.platform, claude:await executable().catch(()=>''), dataRoot, profiles:Object.entries(existingProfiles).filter(([name])=>existsSync(path.join(os.homedir(),'.local/bin',name))).map(([command,info])=>({command,provider:info.provider})) }));
+  register('system:info', async () => ({ version:app.getVersion(),tools:agentTools,plannedTools,platform:process.platform, claude:await executable().catch(()=>''), dataRoot, profiles:Object.entries(existingProfiles).filter(([name])=>existsSync(path.join(os.homedir(),'.local/bin',name))).map(([command,info])=>({command,provider:info.provider})) }));
   register('external:open', url => { const parsed=new URL(url); if(!['https:','http:'].includes(parsed.protocol))throw new Error('不支持的链接'); return shell.openExternal(parsed.href); });
 }
 

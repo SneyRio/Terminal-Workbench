@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "packaged": true,
+  "checks": [
+    "pending state, duplicate-click protection and success feedback",
+    "CLI failure is visible rather than silently swallowed",
+    "nonzero unauthenticated JSON produces actionable result",
+    "login in progress refreshes status automatically and clears stale errors",
+    "login tab close cancels safely or terminates and removes the window",
+    "ended login automatically leaves history without removing authentication data",
+    "real wrapper authentication status works with Finder minimal PATH",
+    "closed login window stays closed across application restart"
+  ]
+}

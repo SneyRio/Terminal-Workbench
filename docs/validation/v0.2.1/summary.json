@@ -1,0 +1,6 @@
+{
+  "version": "0.2.1",
+  "unitPassed": 34,
+  "integrationPassed": 38,
+  "scope": "Isolated CLI connection provisioning, encrypted secret rotation and restart; account cards/login/session regression. Final form and version refinements rechecked in provisioning suite. No model requests, no real new OAuth login or third-party inference validation."
+}
