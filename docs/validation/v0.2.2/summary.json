@@ -1,0 +1,6 @@
+{
+  "version": "0.2.2",
+  "unitPassed": 34,
+  "integrationPassed": 14,
+  "scope": "Custom connection footer exclusion and HUD fallback suppression with delegated HUD retained; official quota regression. No model requests."
+}

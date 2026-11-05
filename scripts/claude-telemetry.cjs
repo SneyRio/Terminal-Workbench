@@ -33,7 +33,7 @@ process.stdin.on('end', async () => {
       const index=process.argv.indexOf('--delegate'),command=index>=0?process.argv[index+1]:null;
       const hud=command?await renderStatusLine(command,input,{signal:cancellation.signal}):'';
       if(hud)process.stdout.write(hud);
-      else {
+      else if(process.env.ACCOUNTOR_ACCOUNT_PROVIDER!=='custom') {
         const five=data.rate_limits?.five_hour?.used_percentage,week=data.rate_limits?.seven_day?.used_percentage;
         const remaining=typeof week==='number'&&Number.isFinite(week)?Math.round(Math.min(100,Math.max(0,100-week)))+'%':'未知';
         process.stdout.write('Accountor · 5h 已用 '+(typeof five==='number'?five+'%':'未知')+' · 本周剩余 '+remaining+(command?' · HUD 暂不可用':''));

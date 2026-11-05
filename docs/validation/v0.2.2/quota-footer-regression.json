@@ -1,0 +1,12 @@
+{
+  "passed": true,
+  "packaged": true,
+  "checks": [
+    "five-hour usage, reset countdown and weekly remaining coexist with tooltips",
+    "weekly quota and account selector remain visible at minimum window width",
+    "reset countdown updates as local time passes without an API request",
+    "switching active session uses its own account and missing weekly data stays unknown",
+    "live CLI telemetry updates weekly quota including zero/full/null without model requests",
+    "account quotas remain isolated when returning to original session"
+  ]
+}

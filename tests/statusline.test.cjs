@@ -30,6 +30,8 @@ test('telemetry collects only usage metadata while displaying original HUD or de
  assert.equal(await telemetry(input,env,"printf '\033[32mHUD preserved\033[0m\\n'"),'\x1b[32mHUD preserved\x1b[0m\n');
  const raw=await fs.readFile(path.join(root,key+'-usage.json'),'utf8');assert(!raw.includes('SENSITIVE_FIXTURE'));assert(!raw.includes('display_name'));assert.equal(JSON.parse(raw).usage.five_hour.used_percentage,1);
  assert.equal(await telemetry(input,env,null),'Accountor · 5h 已用 1% · 本周剩余 58%');
+ assert.equal(await telemetry(input,{...env,ACCOUNTOR_ACCOUNT_PROVIDER:'custom'},null),'');
+ assert.equal(await telemetry(input,{...env,ACCOUNTOR_ACCOUNT_PROVIDER:'custom'},"printf 'Custom HUD preserved'"),'Custom HUD preserved');
  const bad=path.join(root,'not-directory');await fs.writeFile(bad,'fixture');assert.equal(await telemetry(input,{...env,ACCOUNTOR_TELEMETRY_DIR:bad},"printf 'HUD still visible'"),'HUD still visible');
 });
 test('prompt hook writes a short title hint without storing the complete prompt',async t=>{

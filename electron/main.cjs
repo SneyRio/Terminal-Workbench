@@ -141,6 +141,7 @@ async function startSession(input) {
     file = await accountExecutable(acct);
     const telemetry = [argvString(process.execPath), argvString(path.join(root, 'scripts/claude-telemetry.cjs'))].join(' ');
     env.ELECTRON_RUN_AS_NODE = '1';
+    env.ACCOUNTOR_ACCOUNT_PROVIDER = acct.provider || 'subscription';
     env.ACCOUNTOR_RUN_ID = sessionId; env.ACCOUNTOR_TELEMETRY_DIR = telemetryDir;
     if(kind==='login'&&acct.provider==='custom')throw new Error('自定义供应商使用 API Key / Token，请在连接详情中编辑');
     if (kind === 'login') args = ['--settings',JSON.stringify({env:{BROWSER:'/usr/bin/open'}}),'auth', 'login', '--claudeai'];
