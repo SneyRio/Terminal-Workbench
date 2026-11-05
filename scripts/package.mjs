@@ -1,0 +1,14 @@
+import { packager } from '@electron/packager';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+const root=process.cwd(),stage=path.join(root,'.release-stage');
+const {version}=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'));
+await fs.rm(stage,{recursive:true,force:true});await fs.mkdir(stage,{recursive:true});
+for(const dir of ['dist','electron'])await fs.cp(path.join(root,dir),path.join(stage,dir),{recursive:true});
+await fs.mkdir(path.join(stage,'scripts'),{recursive:true});
+for(const file of ['claude-telemetry.cjs'])await fs.copyFile(path.join(root,'scripts',file),path.join(stage,'scripts',file));
+await fs.mkdir(path.join(stage,'node_modules'),{recursive:true});
+await fs.cp(path.join(root,'node_modules/node-pty'),path.join(stage,'node_modules/node-pty'),{recursive:true});
+await fs.writeFile(path.join(stage,'package.json'),JSON.stringify({name:'terminal-workbench',version,main:'electron/main.cjs',description:'Local workspaces for agent CLIs',author:'Terminal Workbench',license:'UNLICENSED'}));
+const result=await packager({dir:stage,out:path.join(root,'release','builds.noindex'),name:'终端工作站',appBundleId:'local.claude-accountor.desktop',platform:'darwin',arch:'arm64',electronVersion:'45.2.2',icon:path.join(root,'assets/claude-accountor.icns'),overwrite:true,prune:false,asar:false,download:{cacheRoot:'/private/tmp/claude-accountor-electron'},osxSign:undefined});
+console.log(result.join('\n'));

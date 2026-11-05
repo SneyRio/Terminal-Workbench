@@ -1,0 +1,44 @@
+import {_electron as electron} from 'playwright';
+import {expect} from '@playwright/test';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+const root=process.cwd(),testRoot=path.join(root,'.test-data','git-view-'+Date.now()),project=path.join(testRoot,'repo'),clean=path.join(testRoot,'clean'),plain=path.join(os.tmpdir(),'accountor-plain-'+Date.now());
+const exec=promisify(execFile);
+const git=async(dir,...args)=>(await exec('git',['-c','core.hooksPath=/dev/null','-C',dir,...args],{env:{...process.env,GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1'}})).stdout;
+async function init(dir){await fs.mkdir(dir,{recursive:true});await git(dir,'init','-b','fixture');await fs.writeFile(path.join(dir,'guide.md'),'# Guide\n');await git(dir,'add','.');await git(dir,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fixture');}
+const commit=dir=>git(dir,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-am','fixture');
+await init(project);await init(clean);await fs.mkdir(plain);const realPlain=await fs.realpath(plain);
+await fs.mkdir(path.join(project,'src'));await fs.writeFile(path.join(project,'src/change.ts'),'first\nold value\n');await fs.writeFile(path.join(project,'old name.txt'),'rename\n');await fs.writeFile(path.join(project,'delete.txt'),'delete\n');await fs.writeFile(path.join(project,'config.json'),'{}\n');await fs.writeFile(path.join(project,'binary.bin'),Buffer.from([0,1,2]));await fs.writeFile(path.join(project,'conflict.txt'),'base\n');await git(project,'add','.');await commit(project);
+await git(project,'checkout','-b','other');await fs.writeFile(path.join(project,'conflict.txt'),'other\n');await commit(project);await git(project,'checkout','fixture');await fs.writeFile(path.join(project,'conflict.txt'),'ours\n');await commit(project);await git(project,'merge','other').catch(e=>{if(e.code!==1)throw e;});
+await fs.writeFile(path.join(project,'src/change.ts'),'first\nstaged value\n');await git(project,'add','src/change.ts');await fs.writeFile(path.join(project,'src/change.ts'),'first\nworking value\n');await git(project,'mv','old name.txt','renamed name.txt');await fs.rm(path.join(project,'delete.txt'));await fs.writeFile(path.join(project,'binary.bin'),Buffer.from([0,3,4]));await fs.writeFile(path.join(project,'新增 文件.txt'),'new content\n');
+const before=await git(project,'status','--porcelain=v1','-z'),head=await git(project,'rev-parse','HEAD');
+const app=await electron.launch({...(process.env.ACCOUNTOR_EXECUTABLE?{executablePath:process.env.ACCOUNTOR_EXECUTABLE,args:[]}:{args:[root]}),env:{...process.env,ACCOUNTOR_DATA_DIR:path.join(testRoot,'data')}});
+const checks=[],errors=[];
+try{
+ const page=await app.firstWindow();page.on('pageerror',e=>errors.push(e.message));await page.setViewportSize({width:1440,height:1024});await page.waitForFunction(()=>!!window.accountor);
+ const invoke=(channel,...args)=>page.evaluate(({channel,args})=>window.accountor.invoke(channel,...args),{channel,args});
+ await invoke('settings:save',{theme:'dark'});await invoke('workspace:save',{name:'图形化 Git 回归',projects:[{path:project},{path:clean},{path:plain}],rightOpen:true,rightWidth:480,backend:'embedded'});await page.locator('.workspace-nav').click();
+ const src=page.locator('.tree-row.folder-row').filter({hasText:'src'});await expect(src).toHaveClass(/git-modified/);await src.click();
+ await expect(page.locator('.file-row').filter({hasText:'change.ts'})).toHaveClass(/git-modified/);await expect(page.locator('.file-row').filter({hasText:'新增 文件.txt'})).toHaveClass(/git-added/);await expect(page.locator('.file-row').filter({hasText:'conflict.txt'})).toHaveClass(/git-conflict/);
+ const codeColor=await page.locator('.file-row').filter({hasText:'change.ts'}).locator('svg').evaluate(el=>getComputedStyle(el).color),configColor=await page.locator('.file-row').filter({hasText:'config.json'}).locator('svg').evaluate(el=>getComputedStyle(el).color);expect(codeColor).not.toBe(configColor);
+ await page.screenshot({path:path.join(root,'test-results','file-tree-colored-dark.png')});checks.push('tree file types have distinct colors; modified/untracked/conflict and parent decoration shown');
+ await page.getByRole('button',{name:'Git 变更',exact:true}).click();await expect(page.locator('.git-branch')).toContainText('fixture');
+ for(const name of ['暂存区','工作区','未跟踪','冲突'])await expect(page.locator('.git-group>summary').filter({hasText:name})).toBeVisible();
+ await expect(page.getByRole('button',{name:'暂存区 src/change.ts',exact:true})).toContainText('+1');await expect(page.getByRole('button',{name:'暂存区 renamed name.txt',exact:true})).toContainText('重命名');await expect(page.getByRole('button',{name:'工作区 delete.txt',exact:true})).toContainText('删除');
+ await page.screenshot({path:path.join(root,'test-results','git-graphical-dark.png')});checks.push('graphical groups, branch, file/status badges and per-file added/deleted counts');
+ await page.getByRole('button',{name:'暂存区 src/change.ts',exact:true}).click();await expect(page.locator('.diff-line.added')).toContainText('staged value');await expect(page.locator('.diff-line.deleted')).toContainText('old value');
+ await page.getByRole('button',{name:'返回变更列表'}).click();await page.getByRole('button',{name:'工作区 src/change.ts',exact:true}).click();await expect(page.locator('.diff-line.added')).toContainText('working value');await expect(page.locator('.diff-line.deleted')).toContainText('staged value');
+ await page.screenshot({path:path.join(root,'test-results','git-diff-dark.png')});checks.push('staged and working diff show distinct correct red/green lines and line numbers');
+ await page.getByRole('button',{name:'返回变更列表'}).click();await page.getByRole('button',{name:'工作区 binary.bin',exact:true}).click();await expect(page.locator('.git-notice')).toContainText('二进制');
+ await page.getByRole('button',{name:'返回变更列表'}).click();await page.getByRole('button',{name:'冲突 conflict.txt',exact:true}).click();await expect(page.locator('.git-notice')).toContainText('未解决冲突');await expect(page.locator('.git-diff-lines')).toContainText('<<<<<<<');checks.push('binary and conflict states explicitly rendered');
+ await page.getByRole('button',{name:'返回变更列表'}).click();await page.getByRole('button',{name:'未跟踪 新增 文件.txt',exact:true}).click();await expect(page.locator('.diff-line.added')).toContainText('new content');await page.getByRole('button',{name:'打开工作区文件'}).click();await expect(page.locator('.cm-content')).toContainText('new content');checks.push('untracked Unicode/space paths preview correctly and open in editor');
+ await invoke('settings:save',{theme:'light'});await page.getByRole('button',{name:'Git 变更',exact:true}).click();await page.screenshot({path:path.join(root,'test-results','git-graphical-light.png')});
+ await page.getByLabel('Git 项目').selectOption(clean);await expect(page.locator('.git-clean')).toContainText('工作区干净');await expect(page.locator('.git-group')).toHaveCount(0);
+ await page.getByLabel('Git 项目').selectOption(realPlain);await expect(page.locator('.git-notice')).toContainText('不是 Git 仓库');await expect(page.locator('.git-clean')).toHaveCount(0);checks.push('light theme, clean repository and non-Git project switch without stale results');
+ await page.getByLabel('Git 项目').selectOption(project);await expect(page.locator('.git-group>summary').filter({hasText:'冲突'})).toBeVisible();const rowCount=await page.locator('.git-file-row').count();await page.getByRole('button',{name:'刷新 Git 变更'}).click();await expect(page.getByRole('button',{name:'刷新 Git 变更'})).toBeEnabled();await expect(page.locator('.git-file-row')).toHaveCount(rowCount);checks.push('manual refresh returns consistent grouped state without duplicated entries');
+ expect(await git(project,'status','--porcelain=v1','-z')).toBe(before);expect(await git(project,'rev-parse','HEAD')).toBe(head);expect(errors).toEqual([]);checks.push('all operations remain read only with HEAD and working/index status unchanged');
+ await fs.writeFile(path.join(root,'test-results','git-view-regression.json'),JSON.stringify({passed:true,packaged:!!process.env.ACCOUNTOR_EXECUTABLE,checks,errors},null,2));console.log(JSON.stringify({passed:true,checks},null,2));
+}finally{await app.evaluate(({app})=>app.exit(0)).catch(()=>{});await fs.rm(plain,{recursive:true,force:true});}

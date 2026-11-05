@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "packaged": true,
+  "checks": [
+    "workspace arrow folds/reopens session list without ending current terminal",
+    "session in expanded inactive workspace activates its actual workspace and cwd",
+    "left navigation becomes icon rail while preserving terminal process and draft",
+    "collapsed icon entries and workspace icons remain usable; editor instance survives navigation",
+    "expand restores complete sidebar and workspace session controls",
+    "restart retains both navigation/workspace collapse states and file recovery draft"
+  ],
+  "errors": []
+}

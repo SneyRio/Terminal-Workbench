@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "checks": [
+    "legacy insertion order is migrated newest-first without pin or last-used priority",
+    "workspace chevron rotates in place and folder icons crossfade between expanded and collapsed states",
+    "selection and edits cannot change immutable workspace creation ordering",
+    "live but idle terminals keep their original non-working labels",
+    "busy event animates both session labels and shared tabs without resizing; rendered border pixels move",
+    "a split tab remains working while any child is busy and idle siblings return to normal",
+    "reduced-motion preference uses static borders and Stop removes all working decorations",
+    "creation order survives application restart"
+  ],
+  "packaged": true
+}

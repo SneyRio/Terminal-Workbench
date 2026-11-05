@@ -1,0 +1,10 @@
+{
+  "passed": true,
+  "packaged": true,
+  "checks": [
+    "real subscription CLI resumes the precise prior native session and removes only the old app entry",
+    "manual deletion of real CLI retains a local transcript checkpoint in seven-day trash",
+    "real subscription CLI restores deleted native session without duplicate app entries"
+  ],
+  "modelPrompts": 0
+}

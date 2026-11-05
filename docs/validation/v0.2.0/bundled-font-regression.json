@@ -1,0 +1,12 @@
+{
+  "passed": true,
+  "checks": [
+    "existing installation migrates to bundled font",
+    "regular, bold, italic and bold-italic load from packaged local files",
+    "xterm measures terminal cells using bundled face",
+    "monospaced Latin metrics and mixed Chinese terminal output",
+    "font switching and size apply without recreating terminal process",
+    "bundled font preference persists after restart"
+  ],
+  "errors": []
+}

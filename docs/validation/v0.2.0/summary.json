@@ -1,0 +1,28 @@
+{
+  "version": "0.2.0",
+  "date": "2026-11-05",
+  "platform": "macOS arm64",
+  "unit": {
+    "passed": 32,
+    "total": 32
+  },
+  "integration": {
+    "passed": 102,
+    "total": 102,
+    "checksBySuite": {
+      "workspace-order-activity-regression": 8,
+      "account-cards-regression": 12,
+      "titles-purge-regression": 9,
+      "session-trash-regression": 13,
+      "session-management-regression": 10,
+      "quota-footer-regression": 6,
+      "terminal-controls-regression": 8,
+      "native-resume-trash": 3,
+      "smoke": 13,
+      "navigation-regression": 6,
+      "account-login-regression": 8,
+      "bundled-font-regression": 6
+    }
+  },
+  "scope": "Isolated fixtures plus real subscription CLI resume with zero model prompts. A full 101-check run preceded final icon and failed-switch recovery refinements. Workspace activity (8), navigation (6), account cards (12), session management (10), native resume (3) and all 32 unit checks passed again on the final package. Other agents and cross-platform behavior are not validated."
+}

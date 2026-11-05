@@ -1,0 +1,13 @@
+export type Backend = 'embedded';
+export interface Project { path: string; name: string }
+export interface Workspace { createdAt?: number; createdOrder?: number; id: string; name: string; projects: Project[]; backend: Backend; accountId: string; rightOpen: boolean; collapsed?: boolean; rightWidth: number; previewSplit?: number; hiddenGroups?: string[]; selectedSession?: string; group?: string; pinned?: boolean; lastUsedAt?: number }
+export interface UsageWindow { used_percentage?: number; resets_at?: number }
+export interface Account { agentToolId?: string; id: string; name: string; email: string; status: string; source?: string; command?: string; provider?: string; authMethod?: string; checkedAt?: number; error?: string; usage?: { five_hour?: UsageWindow; seven_day?: UsageWindow; time: number } }
+export interface Session { id: string; workspaceId: string; accountId: string; kind: 'claude' | 'shell' | 'login'; backend: Backend; cwd: string; title: string; titleSource?: 'default'|'task'|'manual'; titleToken?: string; status: string; pendingRestore?: string; groupId: string; orientation: string; createdAt: number; exitCode?: number; closedAt?: number; error?: string; claudeSessionId?: string; recovery?: string }
+export interface DeletedWorkspace { workspace: Workspace; sessions: {session:Session;deletedAt:number;expiresAt:number}[] }
+export interface Draft { text: string; baseText: string; version: string; workspaceId: string; time: number }
+export interface Settings { theme: 'light' | 'dark' | 'system'; background: string; opacity: number; fontSize: number; navigationCollapsed?: boolean; fontFamily?: string; lineHeight?: number; terminalRenderer?: 'classic'|'fullscreen'; claudePath: string; shell: string }
+export interface AppState { deletedWorkspaces: DeletedWorkspace[]; workspaces: Workspace[]; accounts: Account[]; sessions: Session[]; selectedWorkspace: string; settings: Settings; drafts: Record<string, Draft>; operations: { id: string; time: number; status: string; source: string; error?: string }[] }
+export interface FileEntry { name: string; path: string; directory: boolean; symlink: boolean }
+export interface OpenFile { path: string; fingerprint?: string; text: string; version: string; size: number; writable?: boolean; binary?: boolean; tooLarge?: boolean; image?: string }
+declare global { interface Window { accountor?: { invoke<T = any>(channel: string, ...args: any[]): Promise<T>; on(channel: string, callback: (data: any) => void): () => void } } }

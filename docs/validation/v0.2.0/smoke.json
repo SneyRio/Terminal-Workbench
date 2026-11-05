@@ -1,0 +1,20 @@
+{
+  "passed": true,
+  "packaged": true,
+  "checks": [
+    "native preload and empty start",
+    "native multi-project workspace creation",
+    "real PTY input/output and first-project cwd",
+    "real file tree and Markdown rendering",
+    "CodeMirror edit and disk save",
+    "external CLI write conflict keeps editor draft",
+    "keyboard save cannot bypass unresolved conflict",
+    "collapsible right panel preserves editor state",
+    "theme switching and opacity settings",
+    "existing CLI profile discovery",
+    "navigation preserves unsaved file tabs",
+    "two live PTY panes",
+    "restart restores workspace, layout, theme and conflict draft"
+  ],
+  "errors": []
+}

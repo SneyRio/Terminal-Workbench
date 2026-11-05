@@ -1,0 +1,10 @@
+import { spawn } from 'node:child_process';
+import { createServer } from 'vite';
+const server = await createServer();
+await server.listen();
+server.printUrls();
+const child = spawn('node_modules/.bin/electron', ['.'], { stdio: 'inherit', env: { ...process.env, ACCOUNTOR_DEV_URL: 'http://127.0.0.1:5173' } });
+const close = async () => { child.kill(); await server.close(); process.exit(); };
+child.on('exit', close);
+process.on('SIGINT', close);
+process.on('SIGTERM', close);

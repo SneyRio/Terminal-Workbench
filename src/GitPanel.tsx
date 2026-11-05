@@ -1,0 +1,38 @@
+import {useEffect,useRef,useState} from 'react';
+import {ArrowLeft,ArrowSquareOut,ArrowsClockwise,CheckCircle,FileText,GitBranch,GitDiff,WarningCircle} from '@phosphor-icons/react';
+import {call,nameOf} from './api';
+import {FileIcon} from './FileIcon';
+import type {Workspace} from './types';
+export interface GitEntry{path:string;absolutePath:string;originalPath?:string;index:string;worktree:string;status:string;stagedStats?:{added:number|null;deleted:number|null};worktreeStats?:{added:number|null;deleted:number|null}}
+export interface GitSnapshot{branch:string;directory:string;total:number;truncated:boolean;entries:GitEntry[]}
+type Group='staged'|'worktree'|'untracked'|'conflict';
+const groupNames:Record<Group,string>={staged:'暂存区',worktree:'工作区',untracked:'未跟踪',conflict:'冲突'};
+export function gitStatusKind(e:GitEntry){return e.status==='conflict'?'conflict':e.status==='untracked'||e.index==='A'?'added':e.status==='D'?'deleted':e.status==='R'?'renamed':'modified';}
+export function gitStatusLabel(e:GitEntry){return ({conflict:'冲突',added:'新增',deleted:'删除',renamed:'重命名',modified:'修改'})[gitStatusKind(e)];}
+export function GitPanel({workspace,active,onOpen,onSnapshot,onError}:{workspace:Workspace;active:boolean;onOpen:(path:string)=>void;onSnapshot:(directory:string,data:GitSnapshot)=>void;onError:(e:unknown)=>void}){
+ const [directory,setDirectory]=useState(workspace.projects[0]?.path||'');
+ const [data,setData]=useState<GitSnapshot|null>(null),[loading,setLoading]=useState(false),[error,setError]=useState('');
+ const [chosen,setChosen]=useState<{entry:GitEntry;group:Group}|null>(null),[patch,setPatch]=useState<any>(null),[diffLoading,setDiffLoading]=useState(false),[diffError,setDiffError]=useState('');
+ const generation=useRef(0),diffGeneration=useRef(0),snapshotRef=useRef(onSnapshot);snapshotRef.current=onSnapshot;
+ const refresh=async()=>{const ticket=++generation.current;setLoading(true);setError('');try{const next=await call<GitSnapshot>('git:status',workspace.id,directory);if(ticket===generation.current){setData(next);snapshotRef.current(directory,next);}}catch(e){if(ticket===generation.current){setData(null);setError(e instanceof Error?e.message:String(e));}}finally{if(ticket===generation.current)setLoading(false);}};
+ useEffect(()=>{if(!active)return;void refresh();const timer=setInterval(()=>void refresh(),15000);return()=>{generation.current++;clearInterval(timer);};},[directory,workspace.id,active]);
+ useEffect(()=>{if(!workspace.projects.some(p=>p.path===directory))setDirectory(workspace.projects[0]?.path||'');},[workspace.projects,directory]);
+ useEffect(()=>{if(!active||!chosen)return;const ticket=++diffGeneration.current;setDiffLoading(true);setDiffError('');setPatch(null);void call('git:diff',workspace.id,directory,chosen.entry.path,chosen.group).then(result=>{if(ticket===diffGeneration.current)setPatch(result);}).catch(e=>{if(ticket===diffGeneration.current)setDiffError(e.message);}).finally(()=>{if(ticket===diffGeneration.current)setDiffLoading(false);});return()=>{diffGeneration.current++;};},[chosen,directory,workspace.id,active,data]);
+ const entries=data?.entries||[];
+ const groups:Record<Group,GitEntry[]>={staged:[],worktree:[],untracked:[],conflict:[]};
+ for(const e of entries){if(e.status==='conflict')groups.conflict.push(e);else if(e.status==='untracked')groups.untracked.push(e);else {if(e.index!==' ')groups.staged.push(e);if(e.worktree!==' ')groups.worktree.push(e);}}
+ const stats=entries.flatMap(e=>[e.stagedStats,e.worktreeStats]).filter(Boolean),added=stats.reduce((n,s)=>n+(s?.added||0),0),deleted=stats.reduce((n,s)=>n+(s?.deleted||0),0);
+ return <div className="git-panel graphical-git">
+  <div className="git-project-control"><select aria-label="Git 项目" value={directory} onChange={e=>{setChosen(null);setData(null);setDirectory(e.target.value);}}>{workspace.projects.map(p=><option key={p.path} value={p.path}>{p.name}</option>)}</select><button className="icon-button" aria-label="刷新 Git 变更" title="刷新 Git 变更" disabled={loading} onClick={()=>{setChosen(null);void refresh();}}><ArrowsClockwise size={17}/></button></div>
+  {error?<p className="git-notice" role="status"><WarningCircle size={20}/>{error}</p>:<>
+  <div className="git-branch"><GitBranch size={18}/><strong>{data?.branch||'读取分支…'}</strong>{loading&&<small role="status">刷新中…</small>}</div>
+  {chosen?<div className="git-diff-view"><div className="git-diff-heading"><button className="icon-button" aria-label="返回变更列表" onClick={()=>setChosen(null)}><ArrowLeft size={17}/></button><div><strong>{nameOf(chosen.entry.path)}</strong><small>{groupNames[chosen.group]} · {chosen.entry.path}</small></div><button className="icon-button" title="打开工作区文件" aria-label="打开工作区文件" disabled={chosen.entry.status==='D'} onClick={()=>onOpen(chosen.entry.absolutePath)}><ArrowSquareOut size={16}/></button></div>
+  {diffLoading?<p className="git-notice" role="status">正在读取差异…</p>:diffError?<p className="inline-error" role="alert">{diffError}</p>:patch?.binary?<p className="git-notice"><FileText size={20}/>二进制文件已变化，暂不显示文本差异。</p>:patch?.tooLarge?<p className="git-notice">文件过大，请在系统应用中查看。</p>:<>{patch?.conflict&&<p className="git-notice">存在未解决冲突，以下显示当前工作区内容。</p>}<div className="git-diff-lines" aria-label="文件行差异">{patch?.lines?.length?patch.lines.map((line:any,i:number)=><div className={'diff-line '+line.type} key={i}><span className="diff-number">{line.old??''}</span><span className="diff-number">{line.next??''}</span><span className="diff-sign">{line.type==='added'?'+':line.type==='deleted'?'-':''}</span><code>{line.text||' '}</code></div>):<p className="git-notice">没有文本行差异，可能仅文件名或权限发生变化。</p>}</div>{patch?.truncated&&<p className="git-notice">仅显示前 4000 行差异。</p>}</>}
+  </div>:<><div className="git-overview" title="增删行数统计已跟踪文件的暂存区和工作区差异"><span><GitDiff size={17}/><strong>{data?.total??'—'}</strong> 个文件</span><span className="git-added">+{added}</span><span className="git-deleted">−{deleted}</span></div><div className={'git-change-bar '+(added+deleted===0?'empty':'')} aria-hidden="true"><i style={{flexGrow:added||1}}/><i style={{flexGrow:deleted||1}}/></div>
+  {!loading&&data&&entries.length===0&&<div className="git-clean"><CheckCircle size={32}/><strong>工作区干净</strong><span>没有待处理的文件变更</span></div>}
+  {(['conflict','staged','worktree','untracked'] as Group[]).map(group=>groups[group].length>0&&<details className="git-group" open key={group}><summary><span className={'git-group-dot '+group}/>{groupNames[group]}<span className="count">{groups[group].length}</span></summary>{groups[group].map(entry=>{const counts=group==='staged'?entry.stagedStats:entry.worktreeStats,kind=gitStatusKind(entry);return <button className={'git-file-row git-'+kind} key={entry.path} title={(entry.originalPath?entry.originalPath+' → ':'')+entry.path} aria-label={groupNames[group]+' '+entry.path} onClick={()=>setChosen({entry,group})}><FileIcon name={entry.path}/><span className="git-file-name"><strong>{nameOf(entry.path)}</strong><small>{entry.originalPath?entry.originalPath+' → ':''}{entry.path.includes('/')?entry.path.slice(0,entry.path.lastIndexOf('/')):'项目根目录'}</small></span><span className="git-line-count">{counts?.added!=null&&<small className="git-added">+{counts.added}</small>}{counts?.deleted!=null&&<small className="git-deleted">−{counts.deleted}</small>}{counts?.added===null&&<small>二进制</small>}</span><span className="git-status-label">{gitStatusLabel(entry)}</span></button>;})}</details>)}
+  {data?.truncated&&<p className="git-notice">变更过多，仅显示前 2000 个文件；总数 {data.total}。</p>}
+  <p className="git-readonly">点击文件查看差异 · 每 15 秒刷新 · 只读查看</p></>}
+  </>}
+ </div>;
+}
