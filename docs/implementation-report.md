@@ -176,4 +176,4 @@ Claude 会话底栏在五小时已用旁新增“本周剩余 xx%”，从当前
 
 安装路径为 `/Applications/终端工作站.app`，保留旧版用户数据并逐文件校验安装副本。旧应用若在使用，则延迟归档，用户退出旧版后打开新名称应用；不强制停止当前会话。归档为 `release/Terminal-Workbench-0.2.0-mac-arm64.zip`。源码延续 GitHub 既有初始提交，认证使用 macOS Keychain，仓库不含令牌、账号状态或运行时恢复资料。
 
-GitHub 交付状态：本地提交 `1c7136e` 已完成，首次推送被 GitHub 以 HTTP 403 拒绝。Keychain 凭据的只读身份检查确认 `SneyRio`；仓库角色显示 push 权限，但该角色信息不能证明当前细粒度令牌拥有 Contents 写权限。远端仍为初始提交，待用户调整令牌权限后重试。
+GitHub 交付状态：用户更新现有令牌的仓库写权限后，`main` 已成功推送至 `https://github.com/SneyRio/Terminal-Workbench.git`，保留远端初始提交历史。应用实现提交为 `1c7136e`；首次推送的 HTTP 403 已解决。认证继续使用本机 macOS Keychain，令牌未进入源码。
