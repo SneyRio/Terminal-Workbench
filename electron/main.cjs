@@ -22,6 +22,8 @@ const profileDiscovery=require('./profile-discovery.cjs');
 const {backupBeforeUpgrade}=require('./release-support.cjs');
 const updates=require('./updates.cjs');
 const platformTools=require('./platform.cjs');
+const {WindowsCliDiscovery}=require('./cli-discovery.cjs');
+const windowsCli=new WindowsCliDiscovery();
 const {prepareTrash}=require('./file-trash.cjs');
 const {Connections,connection}=require('./account-connections.cjs');
 const root = path.resolve(__dirname, '..');
@@ -52,6 +54,7 @@ function cliEnv(configDirectory) {
 
 async function executable() {
   const configured = store.state.settings.claudePath;
+  if(process.platform==='win32'){const detected=await windowsCli.detect(configured);if(detected.path)return detected.path;throw new Error(detected.message);}
   if(configured){if(process.platform==='win32'&&!/\.exe$/i.test(configured))throw new Error('Windows 请选择原生 claude.exe；不直接执行 .cmd/.bat 启动脚本');try{await fs.access(configured,1);return configured;}catch{throw new Error('配置的 Claude CLI 路径不可执行，请在设置中修正');}}
   const options = platformTools.executableCandidates(configured);
   for (const option of options) { try { await fs.access(option, 1); return option; } catch {} }
@@ -137,6 +140,10 @@ async function startSession(input) {
   // Login must use the user's macOS default browser, never an embedded webview or a named browser.
   Object.assign(env,platformTools.browserSettings());
   let file = store.state.settings.shell || platformTools.defaultShell(), args = platformTools.shellArgs(file);
+  if(kind==='shell'&&process.platform==='win32'){
+    const cli=await executable().catch(()=>null);
+    if(cli){env.Path=path.dirname(cli)+';'+platformTools.value(env,'PATH');args=platformTools.discoveredShellArgs(file,cli);}
+  }
   if (acct) {
     if(acct.source!=='existing')await installTelemetry(acct.id);
     file = await accountExecutable(acct);
@@ -584,8 +591,11 @@ function registerHandlers() {
     await store.update(s=>s.settings.background=file); pushState();
   });
   register('settings:background-data', async () => { const file=store.state.settings.background; if(!file)return ''; try { const ext=path.extname(file); return `data:image/${['.jpg','.jpeg'].includes(ext)?'jpeg':ext.slice(1)};base64,${(await fs.readFile(file)).toString('base64')}`; } catch { return ''; } });
-  register('system:info', async () => ({version:app.getVersion(),tools:agentTools,plannedTools,platform:process.platform,arch:process.arch,claude:await executable().catch(()=>''),dataRoot,profiles:await profileDiscovery.discover(),releaseChannel:require('../package.json').releaseChannel||'unsigned-beta'}));
-  register('setup:cli',async()=>{const pick=await dialog.showOpenDialog(win,{title:'选择 Claude CLI 可执行文件',properties:['openFile','showHiddenFiles']});if(pick.canceled)return null;const file=await fs.realpath(pick.filePaths[0]);if(process.platform==='win32'&&!/\.exe$/i.test(file))throw new Error('请选择原生 claude.exe，不支持直接选择 .cmd/.bat');await fs.access(file,1);if(!(await fs.stat(file)).isFile())throw new Error('请选择可执行文件');await store.update(s=>{s.settings.claudePath=file;});pushState();return file;});
+  register('system:info', async (options={}) => {
+    const detected=process.platform==='win32'?await windowsCli.detect(store.state.settings.claudePath,{refresh:!!options?.refreshCli}):null;
+    return {version:app.getVersion(),tools:agentTools,plannedTools,platform:process.platform,arch:process.arch,claude:detected?detected.path:await executable().catch(()=>''),cliDetection:detected,dataRoot,profiles:await profileDiscovery.discover(),releaseChannel:require('../package.json').releaseChannel||'unsigned-beta'};
+  });
+  register('setup:cli',async()=>{const pick=await dialog.showOpenDialog(win,{title:'选择 Claude CLI 可执行文件',properties:['openFile','showHiddenFiles']});if(pick.canceled)return null;const file=process.platform==='win32'?path.resolve(pick.filePaths[0]):await fs.realpath(pick.filePaths[0]);if(process.platform==='win32'){if(!/\.exe$/i.test(file))throw new Error('请选择 Claude 程序，不支持选择 .ps1/.cmd/.bat 启动脚本');const found=await windowsCli.detect(file,{refresh:true});if(found.path.toLowerCase()!==file.toLowerCase())throw new Error('所选程序未通过运行检查，请点击重新检测以自动查找');}await fs.access(file,1);if(!(await fs.stat(file)).isFile())throw new Error('请选择可执行文件');await store.update(s=>{s.settings.claudePath=file;});pushState();return file;});
   register('setup:finish',async()=>{await store.update(s=>{s.onboarding={completedAt:Date.now()};});pushState();});
   register('updates:check',()=>updates.check(app.getVersion()));
   register('data:backup',async()=>{await draftWrites.flush();await store.queue;const dir=await backupBeforeUpgrade(dataRoot,'manual-'+Date.now());return dir;});

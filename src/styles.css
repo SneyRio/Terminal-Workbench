@@ -49,3 +49,5 @@
 html[data-platform=win32] .traffic-space{height:0}html[data-platform=win32] .navigation .brand{padding-top:16px}
 
 .tree-entry{display:flex;align-items:center;min-width:0}.tree-entry>.tree-row{flex:1;min-width:0;width:0}.tree-delete{flex:0 0 25px;opacity:0;color:var(--muted)}.tree-entry:hover>.tree-delete,.tree-entry:focus-within>.tree-delete{opacity:1}.tree-delete:hover{color:var(--danger);background:var(--hover)}
+
+.terminal-notice{flex:0 0 auto;margin:0;padding:8px 12px;border-bottom:1px solid var(--border);color:var(--muted);font-size:12px;display:flex;align-items:center;gap:8px}.setup-guide details{margin-top:16px}.setup-guide details summary{cursor:pointer;color:var(--muted)}

@@ -14,6 +14,12 @@ function defaultShell(env=process.env,platform=process.platform,exists=fs.exists
  const p=path.win32,candidates=[value(env,'ProgramFiles')&&p.join(value(env,'ProgramFiles'),'PowerShell','7','pwsh.exe'),p.join(value(env,'SystemRoot')||'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe'),value(env,'ComSpec')].filter(Boolean);return candidates.find(exists)||candidates[1];
 }
 function shellArgs(file,platform=process.platform){if(platform!=='win32')return ['-l'];if(/(?:^|[\\/])cmd\.exe$/i.test(file))return ['/d','/q'];if(/(?:pwsh|powershell)\.exe$/i.test(file))return ['-NoLogo'];if(/bash\.exe$/i.test(file))return ['-l'];return [];}
+function discoveredShellArgs(file,cli,platform=process.platform){
+ if(platform!=='win32'||!cli||!/(?:pwsh|powershell)\.exe$/i.test(file))return shellArgs(file,platform);
+ const script='$env:Path = '+quotePowerShell(path.win32.dirname(cli)+';')+' + $env:Path; '+
+  "$existing=Get-Command claude -ErrorAction SilentlyContinue; if(-not $existing -or @('Alias','Function','Filter') -notcontains $existing.CommandType.ToString()){ function global:claude { & "+quotePowerShell(cli)+' @args } }';
+ return ['-NoLogo','-NoExit','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')];
+}
 function browserSettings(platform=process.platform,env=process.env){return platform==='darwin'?{BROWSER:'/usr/bin/open'}:platform==='win32'?{BROWSER:path.win32.join(value(env,'SystemRoot')||'C:\\Windows','explorer.exe')}:{};}
 const quotePosix=s=>"'"+String(s).replaceAll("'","'\\''")+"'";
 const quotePowerShell=s=>"'"+String(s).replaceAll("'","''")+"'";
@@ -33,4 +39,4 @@ function hudShell(env=process.env,platform=process.platform,exists=fs.existsSync
  const base=value(env,'ProgramFiles')||'C:\\Program Files';const bash=[path.win32.join(base,'Git','bin','bash.exe'),value(env,'LOCALAPPDATA')&&path.win32.join(value(env,'LOCALAPPDATA'),'Programs','Git','bin','bash.exe')].filter(Boolean).find(exists);
  if(bash)return {file:bash,args:['-c'],detached:false};return {file:defaultShell(env,'win32',exists),args:['-NoLogo','-NoProfile','-NonInteractive','-Command'],detached:false,powershell:true};
 }
-module.exports={value,searchPath,executableCandidates,defaultShell,shellArgs,browserSettings,quotePosix,quotePowerShell,powershellCommand,hookSettings,hudShell};
+module.exports={value,searchPath,executableCandidates,defaultShell,shellArgs,discoveredShellArgs,browserSettings,quotePosix,quotePowerShell,powershellCommand,hookSettings,hudShell};
