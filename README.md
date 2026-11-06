@@ -10,6 +10,8 @@
 
 ## 安装内测版
 
+[下载 DMG（macOS Apple Silicon · 未公证内测）](https://github.com/SneyRio/Terminal-Workbench/releases/download/v0.3.0-beta.1/WbSpace-0.3.0-mac-arm64-unsigned-beta.dmg) · [Release、校验值及安装说明](https://github.com/SneyRio/Terminal-Workbench/releases/tag/v0.3.0-beta.1)
+
 当前提供 WbSpace macOS Apple Silicon DMG/ZIP。DMG 拖入 Applications；首次打开若因未验证开发者而拦截，可在系统设置的隐私与安全性中对该应用确认“仍要打开”，受管电脑可能禁止放行。包仅有完整临时签名，没有 Developer ID 和 Apple 公证。
 
 用户需自行安装 Claude CLI，首次启动指南可检测或选择可执行文件，再添加账号与工作空间。详见 [安装、升级及本机恢复说明](docs/install-beta.md)。项目源码推送不代表 GitHub Release 已发布。

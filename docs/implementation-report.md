@@ -213,4 +213,4 @@ GitHub 交付状态：用户更新现有令牌的仓库写权限后，`main` 已
 
 验证摘要见 validation/v0.3.0。38 个单元测试通过；本轮多个包迭代验证 97 个不同集成检查，最终公共名称/选区/Chrome 调整后重新跑首启 8、账号卡片 12、标题与删除 9、终端 9、真实 CLI 3、跨品牌密钥 2 项。其他账号/文件/导航/恢复/额度回归在此前同版迭代通过。未在另一台真实 Mac、Intel Mac 或受管设备验收，不宣称未公证包必然能放行；后台自动更新和正式签名/公证不属于已验收能力。
 
-交付为 `/Applications/WbSpace.app` 和 `release/WbSpace-0.3.0-mac-arm64-unsigned-beta.dmg`。源码继续同步原 GitHub 仓库，不公开上传用户数据或凭据。当前未创建公开 GitHub Release。
+交付为 `/Applications/WbSpace.app` 和 `release/WbSpace-0.3.0-mac-arm64-unsigned-beta.dmg`。源码继续同步原 GitHub 仓库，不公开上传用户数据或凭据。用户明确要求后，发布 GitHub 预发布版 `v0.3.0-beta.1`，附未公证 DMG、SHA-256 和安装说明；二进制通过 Release 分发，不进入源码 Git 历史。

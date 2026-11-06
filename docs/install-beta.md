@@ -4,6 +4,8 @@
 
 ## 安装
 
+下载入口：[GitHub 内测 Release](https://github.com/SneyRio/Terminal-Workbench/releases/tag/v0.3.0-beta.1)，提供 DMG、对应 SHA-256 和独立安装说明。当前为预发布版，应用内正式版本检查不会将其作为稳定更新推送。
+
 1. 获取 `WbSpace-0.3.0-mac-arm64-unsigned-beta.dmg`，可用同名 `.sha256` 文件核对哈希。
 2. 打开 DMG，将“WbSpace.app”拖到 Applications。旧版需先等任务结束，再按 ⌘Q 退出后替换。
 3. 弹出磁盘映像，从“应用程序”打开。
