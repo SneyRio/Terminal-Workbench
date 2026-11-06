@@ -1,6 +1,6 @@
 # Windows x64 内测
 
-目标系统：Windows 10 22H2、Windows 11 x64。Windows Server 2022 x64 原生构建、25 项单元检查、14 项桌面流程及 4 项安装生命周期检查已通过。[验收运行](https://github.com/SneyRio/Terminal-Workbench/actions/runs/42179651138)。安装包发布见仓库 Releases；个人 Windows 10/11 桌面和真实 OAuth 仍需用户环境验收。
+目标系统：Windows 10 22H2、Windows 11 x64。Windows Server 2022 x64 原生构建、25 项单元检查、14 项桌面流程及 4 项安装生命周期检查已通过。[验收运行](https://github.com/SneyRio/Terminal-Workbench/actions/runs/42179651138)。安装包发布见 [0.4.0 内测 Release](https://github.com/SneyRio/Terminal-Workbench/releases/tag/v0.4.0-win-beta.16)；个人 Windows 10/11 桌面和真实 OAuth 仍需用户环境验收。
 
 ## 安装与使用
 
