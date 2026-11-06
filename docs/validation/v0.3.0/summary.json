@@ -17,5 +17,5 @@
     "rebrand-migration": 2,
     "titles-purge-regression": 9
   },
-  "scope": "Checks passed across same-version build iterations. Final rebrand, selection and no-Chrome changes rechecked in setup (8), titles (9), terminal (9), native CLI (3), credential migration (2). No model prompts, no real new OAuth. No second physical Mac or notarization/Developer ID validation."
+  "scope": "Checks passed across same-version build iterations. Final rebrand, selection and no-Chrome changes rechecked in setup (8), account cards (12), titles (9), terminal (9), native CLI (3), credential migration (2). No model prompts, no real new OAuth. No second physical Mac or notarization/Developer ID validation."
 }
