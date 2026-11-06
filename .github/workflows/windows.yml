@@ -41,3 +41,39 @@ jobs:
             release/windows/release-manifest.json
             release/windows/安装说明.txt
           if-no-files-found: error
+  publish:
+    if: github.ref == 'refs/heads/main'
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: WbSpace-windows-x64
+          path: bundle
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-validation
+          path: validation
+      - name: Verify validated release inputs
+        run: |
+          cd bundle
+          sha256sum --check SHA256SUMS.txt
+          python3 - <<'PY'
+          import json
+          for file in ['../validation/windows-smoke.json', '../validation/windows-installer.json']:
+              data=json.load(open(file))
+              assert data['passed'] and data['platform']=='win32', file
+          PY
+      - name: Publish Windows beta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: v0.4.0-win-beta.${{ github.run_number }}
+        run: |
+          gh release create "$TAG" bundle/* validation/windows-smoke.json validation/windows-installer.json --target "$GITHUB_SHA" --title "WbSpace 0.4.0 · Windows x64 Beta" --notes-file docs/windows-release-notes.md --prerelease --draft
+          gh release edit "$TAG" --draft=false
