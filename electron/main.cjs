@@ -22,6 +22,7 @@ const profileDiscovery=require('./profile-discovery.cjs');
 const {backupBeforeUpgrade}=require('./release-support.cjs');
 const updates=require('./updates.cjs');
 const platformTools=require('./platform.cjs');
+const {prepareTrash}=require('./file-trash.cjs');
 const {Connections,connection}=require('./account-connections.cjs');
 const root = path.resolve(__dirname, '..');
 // Keep the established safeStorage/Keychain namespace across the public rebrand.
@@ -557,6 +558,14 @@ function registerHandlers() {
   register('files:read-if-changed',(wid,file,previous)=>store.readIfChanged(wid,file,previous));
   register('files:save',async(wid,file,text,version)=>{await draftWrites.flush();return store.save(wid,file,text,version);});
   register('files:close-choice', async name => (await dialog.showMessageBox(win,{type:'question',message:'保存对 '+String(name).slice(0,150)+' 的修改？',detail:'取消可继续编辑；保存遇到冲突时会保留标签。',buttons:['取消','保存并关闭','放弃修改'],defaultId:1,cancelId:0})).response);
+  register('files:trash',async(wid,file)=>{
+    await draftWrites.flush();const target=await prepareTrash(store,wid,file);
+    const choice=await dialog.showMessageBox(win,{type:'warning',message:'将“'+path.basename(target.path)+'”移入系统回收站？',detail:target.path+(target.directory?'\n文件夹及其中的内容将一起移入回收站。':'')+'\n可在系统回收站恢复；这不是会话的“最近删除”。',buttons:['取消','移入回收站'],defaultId:0,cancelId:0});
+    if(choice.response!==1)return null;
+    await draftWrites.flush();const current=await prepareTrash(store,wid,file);
+    if(current.path!==target.path||current.identity!==target.identity)throw new Error('文件在确认期间发生变化，请刷新后重试');
+    await shell.trashItem(target.path);return {path:target.path};
+  });
   register('files:external', async (wid,file) => { const real=await store.resolveFile(wid,file); const error=await shell.openPath(real); if(error) throw new Error(error); });
   register('draft:save',(file,draft)=>{if(typeof file!=='string'||(draft&&typeof draft.text!=='string'))throw new Error('无效草稿');return draftWrites.enqueue(file,draft);});
   register('git:status',(wid,directory)=>gitView.snapshot(store,wid,directory));

@@ -1,0 +1,12 @@
+{
+  "passed": true,
+  "checks": [
+    "dirty editor blocks deletion without changing disk, buffer or draft",
+    "canceling confirmation preserves file and editor",
+    "system trash failure keeps file and open tab without permanent-delete fallback",
+    "confirmed file trash delegates exact scoped path and refreshes tree and editor tabs",
+    "nonempty folder trash closes descendant tabs and preserves contents in the system-trash delegate",
+    "project root has no delete control and native IPC also rejects its removal"
+  ],
+  "systemTrash": "mocked-to-isolated-directory"
+}

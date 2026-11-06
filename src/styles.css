@@ -47,3 +47,5 @@
 .setup-steps,.setup-actions{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}.setup-steps button{padding:10px 14px;border:1px solid var(--border);border-radius:8px}.setup-steps .selected{color:var(--accent);background:var(--selected)}.setup-guide p{line-height:1.8}.release-settings{margin:25px 0;border-top:1px solid var(--border);padding-top:20px}.release-settings [role=status]{line-height:1.7}
 
 html[data-platform=win32] .traffic-space{height:0}html[data-platform=win32] .navigation .brand{padding-top:16px}
+
+.tree-entry{display:flex;align-items:center;min-width:0}.tree-entry>.tree-row{flex:1;min-width:0;width:0}.tree-delete{flex:0 0 25px;opacity:0;color:var(--muted)}.tree-entry:hover>.tree-delete,.tree-entry:focus-within>.tree-delete{opacity:1}.tree-delete:hover{color:var(--danger);background:var(--hover)}

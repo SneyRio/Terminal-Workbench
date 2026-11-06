@@ -26,7 +26,12 @@ jobs:
           key: windows-2022-x64-electron-45.2.2-nodepty-1.1.0-${{ hashFiles('package-lock.json') }}
       - run: npm run rebuild:native
         if: steps.pty-cache.outputs.cache-hit != 'true'
-      - run: node --test tests/platform.test.cjs tests/release-readiness.test.cjs tests/performance.test.cjs tests/session-history.test.cjs tests/session-titles.test.cjs
+      - uses: actions/cache/save@v4
+        if: steps.pty-cache.outputs.cache-hit != 'true'
+        with:
+          path: node_modules/node-pty/build
+          key: ${{ steps.pty-cache.outputs.cache-primary-key }}
+      - run: node --test tests/file-trash.test.cjs tests/platform.test.cjs tests/release-readiness.test.cjs tests/performance.test.cjs tests/session-history.test.cjs tests/session-titles.test.cjs
       - run: npm run package:win
       - run: ./scripts/build-windows-fixture.ps1
       - run: npm run test:windows

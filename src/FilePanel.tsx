@@ -10,7 +10,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
 import Papa from 'papaparse';
-import { ArrowSquareOut, ArrowsOut, ArrowsIn, CaretDown, CaretRight, Check, Code, FileText, FloppyDisk, Folder, FolderOpen, GitBranch, X, ArrowsClockwise } from '@phosphor-icons/react';
+import { ArrowSquareOut, ArrowsOut, ArrowsIn, CaretDown, CaretRight, Check, Code, FileText, FloppyDisk, Folder, FolderOpen, GitBranch, X, ArrowsClockwise, Trash } from '@phosphor-icons/react';
 import { call, nameOf } from './api';
 import {FileIcon} from './FileIcon';
 import {GitPanel,gitStatusKind,gitStatusLabel} from './GitPanel';
@@ -18,12 +18,13 @@ import type {GitSnapshot} from './GitPanel';
 import type { AppState, Draft, FileEntry, OpenFile, Workspace } from './types';
 
 type Decoration={kind:string;label:string};
-function Tree({ workspace, path, label, root, onOpen, decorations }: { workspace: Workspace; path: string; label: string; root?: number; onOpen: (path: string) => void; decorations:Record<string,Decoration> }) {
+function Tree({ workspace, path, label, root, onOpen, onDelete, refresh, decorations }: { workspace: Workspace; path: string; label: string; root?: number; onOpen: (path: string) => void; onDelete:(path:string)=>void; refresh:number; decorations:Record<string,Decoration> }) {
   const decoration=decorations[path];
   const [open, setOpen] = useState(root === 1), [entries, setEntries] = useState<FileEntry[]>([]), [error, setError] = useState('');
-  useEffect(() => { if (open) void call<FileEntry[]>('files:list', workspace.id, path).then(setEntries).catch(e => setError(e.message)); }, [open, path, workspace.id]);
-  return <div className="tree-node"><button className={'tree-row folder-row '+(decoration?'git-'+decoration.kind+' ':'')+(root?'tree-root':'')} onClick={() => setOpen(!open)} title={path+(decoration?' · '+decoration.label:'')}>{open ? <CaretDown size={12}/> : <CaretRight size={12}/>} {root ? <span className="project-number">{root}</span> : open ? <FolderOpen size={15} className="folder-icon"/> : <Folder size={15} className="folder-icon"/>}<span className="truncate">{label}</span>{decoration&&<small className="tree-git-label">{decoration.kind==='conflict'?'!':'●'}</small>}{root === 1 && <small className="badge">主项目</small>}</button>
-    {open && <div className="tree-children">{error && <p className="inline-error">{error}</p>}{entries.map(e => e.directory && !e.symlink ? <Tree key={e.path} workspace={workspace} path={e.path} label={e.name} onOpen={onOpen} decorations={decorations}/> : <button key={e.path} className={'tree-row file-row '+(decorations[e.path]?'git-'+decorations[e.path].kind:'')} onClick={() => onOpen(e.path)} title={e.path+(decorations[e.path]?' · '+decorations[e.path].label:'')}><FileIcon name={e.name}/><span className="truncate">{e.name}{e.symlink ? ' ↗' : ''}</span>{decorations[e.path]&&<small className="tree-git-label">{decorations[e.path].label}</small>}</button>)}</div>}
+  useEffect(() => { let disposed=false;if (open) void call<FileEntry[]>('files:list', workspace.id, path).then(data=>{if(!disposed){setEntries(data);setError('');}}).catch(e=>{if(!disposed)setError(e.message);});return()=>{disposed=true;}; }, [open, path, workspace.id,refresh]);
+  const remove=(file:string,name:string)=><button className="tree-delete icon-button tiny" aria-label={'删除 '+name} title="移入系统回收站" onClick={()=>onDelete(file)}><Trash size={13}/></button>;
+  return <div className="tree-node"><div className="tree-entry"><button className={'tree-row folder-row '+(decoration?'git-'+decoration.kind+' ':'')+(root?'tree-root':'')} onClick={() => setOpen(!open)} title={path+(decoration?' · '+decoration.label:'')}>{open ? <CaretDown size={12}/> : <CaretRight size={12}/>} {root ? <span className="project-number">{root}</span> : open ? <FolderOpen size={15} className="folder-icon"/> : <Folder size={15} className="folder-icon"/>}<span className="truncate">{label}</span>{decoration&&<small className="tree-git-label">{decoration.kind==='conflict'?'!':'●'}</small>}{root === 1 && <small className="badge">主项目</small>}</button>{!root&&remove(path,label)}</div>
+    {open && <div className="tree-children">{error && <p className="inline-error">{error}</p>}{entries.map(e => e.directory && !e.symlink ? <Tree key={e.path} workspace={workspace} path={e.path} label={e.name} onOpen={onOpen} onDelete={onDelete} refresh={refresh} decorations={decorations}/> : <div key={e.path} className="tree-entry"><button className={'tree-row file-row '+(decorations[e.path]?'git-'+decorations[e.path].kind:'')} onClick={() => onOpen(e.path)} title={e.path+(decorations[e.path]?' · '+decorations[e.path].label:'')}><FileIcon name={e.name}/><span className="truncate">{e.name}{e.symlink ? ' ↗' : ''}</span>{decorations[e.path]&&<small className="tree-git-label">{decorations[e.path].label}</small>}</button>{!e.symlink&&remove(e.path,e.name)}</div>)}</div>}
   </div>;
 }
 
@@ -87,6 +88,8 @@ function Preview({ file, text, workspace, onOpen }: { file: OpenFile; text: stri
 interface Buffer { file: OpenFile; text: string; baseText: string; mode: 'edit' | 'preview'; conflict?: { disk: string; version: string }; saving?: boolean; error?: string }
 export function FilePanel({ workspace, state, dark, onError, maximized, onMaximize, active }: { workspace: Workspace; state: AppState; dark: boolean; onError: (e: unknown) => void; maximized:boolean; active:boolean; onMaximize:(value:boolean)=>void }) {
   const splitRef=useRef<HTMLDivElement>(null);
+  const [treeVersion,setTreeVersion]=useState(0);const deleting=useRef(false);
+  const contains=(parent:string,file:string)=>{const normalize=(p:string)=>navigator.platform.startsWith('Win')?p.replaceAll('\\','/').toLowerCase():p;const a=normalize(parent),b=normalize(file);return a===b||b.startsWith(a+'/');};
   const [treeRatio,setTreeRatio]=useState(workspace.previewSplit??0.43);
   const ratioRef=useRef(treeRatio);
   const dragRef=useRef<{y:number;ratio:number;height:number}|null>(null);
@@ -107,7 +110,7 @@ export function FilePanel({ workspace, state, dark, onError, maximized, onMaximi
     if(!active||section!=='files')return;let disposed=false,busy=false;
     const refresh=async()=>{if(busy)return;busy=true;try{const entries=await Promise.all(workspace.projects.map(async project=>[project.path,await call<GitSnapshot>('git:decorations',workspace.id,project.path).catch(()=>null)] as const));if(!disposed)setGitSnapshots(Object.fromEntries(entries.filter(([,data])=>data)) as Record<string,GitSnapshot>);}finally{busy=false;}};
     void refresh();const timer=setInterval(()=>void refresh(),15000);return()=>{disposed=true;clearInterval(timer);};
-  },[active,section,workspace.id,projectKey]);
+  },[active,section,workspace.id,projectKey,treeVersion]);
   const decorations=useMemo(()=>{
     const result:Record<string,Decoration>={};
     for(const [directory,snapshot] of Object.entries(gitSnapshots))for(const entry of snapshot.entries){
@@ -185,11 +188,21 @@ export function FilePanel({ workspace, state, dark, onError, maximized, onMaximi
     if (selected === path) setSelected(Object.keys(buffers).find(p => p !== path) || '');
     if(Object.keys(buffersRef.current).length===1&&maximized)onMaximize(false);
   };
+  const removeFile=async(path:string)=>{
+    if(deleting.current)return;deleting.current=true;
+    try{
+      if(Object.entries(buffersRef.current).some(([file,b])=>contains(path,file)&&b.text!==b.baseText))throw new Error('其中有未保存的编辑内容，请先保存或关闭并处理草稿，再删除');
+      const result=await call<{path:string}|null>('files:trash',workspace.id,path);if(!result)return;
+      const remaining=Object.fromEntries(Object.entries(buffersRef.current).filter(([file])=>!contains(path,file)&&!contains(result.path,file)));
+      buffersRef.current=remaining;setBuffers(remaining);if(!remaining[selected])setSelected(Object.keys(remaining)[0]||'');
+      if(!Object.keys(remaining).length&&maximized)onMaximize(false);setTreeVersion(v=>v+1);
+    }catch(error){onError(error);}finally{deleting.current=false;}
+  };
   const b = buffers[selected];
   return <aside className={'file-panel '+(maximized?'content-maximized':'')} aria-label="文件与编辑器">
     <div className="panel-tabs"><button className={section === 'files' ? 'active' : ''} onClick={() => setSection('files')}><FolderOpen size={16}/>文件</button><button className={section === 'git' ? 'active' : ''} onClick={() => setSection('git')}><GitBranch size={16}/>Git 变更</button></div>
     {section === 'git' ? <GitPanel workspace={workspace} active={active} onOpen={path=>void open(path)} onSnapshot={(directory,data)=>setGitSnapshots(previous=>({...previous,[directory]:data}))} onError={onError}/> : <div className="file-content" ref={splitRef}>
-      <div className="tree-section" style={{flex:Object.keys(buffers).length?'0 0 '+(treeRatio*100)+'%':'1 1 auto'}}><div className="section-label">工作空间项目 <small>{workspace.projects.length}</small></div><p className="panel-hint">第一个项目作为 CLI 启动目录</p>{workspace.projects.map((p,i) => <Tree key={p.path} workspace={workspace} path={p.path} label={p.name} root={i+1} onOpen={path => void open(path)} decorations={decorations}/>)}</div>
+      <div className="tree-section" style={{flex:Object.keys(buffers).length?'0 0 '+(treeRatio*100)+'%':'1 1 auto'}}><div className="section-label">工作空间项目 <small>{workspace.projects.length}</small><button className="icon-button tiny" aria-label="刷新文件树" onClick={()=>setTreeVersion(v=>v+1)}><ArrowsClockwise size={14}/></button></div><p className="panel-hint">第一个项目作为 CLI 启动目录</p>{workspace.projects.map((p,i) => <Tree key={p.path} workspace={workspace} path={p.path} label={p.name} root={i+1} onOpen={path => void open(path)} onDelete={path=>void removeFile(path)} refresh={treeVersion} decorations={decorations}/>)}</div>
       {Object.keys(buffers).length>0&&<div className="preview-resize-handle" role="separator" tabIndex={0} aria-label="调整文件内容高度" aria-orientation="horizontal" aria-valuemin={15} aria-valuemax={75} aria-valuenow={Math.round(treeRatio*100)} title="上下拖动调整内容高度；双击恢复默认" onPointerDown={e=>{e.preventDefault();e.currentTarget.setPointerCapture(e.pointerId);dragRef.current={y:e.clientY,ratio:ratioRef.current,height:splitRef.current?.clientHeight||600};}} onPointerMove={e=>{const drag=dragRef.current;if(drag)updateRatio(drag.ratio+(e.clientY-drag.y)/drag.height);}} onPointerUp={endDrag} onPointerCancel={endDrag} onLostPointerCapture={endDrag} onDoubleClick={()=>{updateRatio(.43);saveRatio();}} onKeyDown={e=>{if(['ArrowUp','ArrowDown','Home','End'].includes(e.key)){e.preventDefault();updateRatio(e.key==='Home'?.15:e.key==='End'?.75:ratioRef.current+(e.key==='ArrowUp'?-.03:.03));saveRatio();}}}><span/></div>}
       {Object.keys(buffers).length > 0 && <div className="editor-area"><div className="file-tabs">{Object.entries(buffers).map(([path, item]) => <button className={selected === path ? 'active' : ''} key={path} onClick={() => setSelected(path)} title={path}><FileText size={13}/>{nameOf(path)}{item.text !== item.baseText && <span className="dirty-dot"/>}<span role="button" aria-label={'关闭 ' + nameOf(path)} onClick={e => { e.stopPropagation(); void close(path); }}><X size={12}/></span></button>)}</div>
       {b && <><div className="editor-toolbar"><div className="segmented small"><button className={b.mode === 'edit' ? 'active' : ''} disabled={!!(b.file.image || b.file.binary || b.file.tooLarge)} onClick={() => setBuffers(bs => ({ ...bs, [selected]: { ...b, mode:'edit' } }))}><Code size={13}/>编辑</button><button className={b.mode === 'preview' ? 'active' : ''} onClick={() => setBuffers(bs => ({ ...bs, [selected]: { ...b, mode:'preview' } }))}>预览</button></div><span className="spacer"/>{b.text !== b.baseText && <small className="unsaved">未保存</small>}<button className="icon-button" title={navigator.platform.startsWith('Win')?'保存文件 Ctrl+S':'保存文件 ⌘S'} aria-label="保存文件" disabled={b.text === b.baseText || !!b.conflict} onClick={() => void save(selected)}><FloppyDisk size={16}/></button><button className="icon-button" aria-label={maximized?'还原文件内容':'放大文件内容'} title={maximized?'还原文件内容':'放大至中间和右侧区域'} aria-pressed={maximized} onClick={()=>onMaximize(!maximized)}>{maximized?<ArrowsIn size={16}/>:<ArrowsOut size={16}/>}</button><button className="icon-button" aria-label="在系统应用打开" title="按文件类型在系统默认应用中打开" onClick={() => void call('files:external', workspace.id, selected).catch(onError)}><ArrowSquareOut size={15}/></button></div>
