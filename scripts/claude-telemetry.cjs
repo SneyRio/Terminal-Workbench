@@ -30,7 +30,7 @@ process.stdin.on('end', async () => {
       fs.writeFileSync(tmp, JSON.stringify(output), { mode: 0o600 }); fs.renameSync(tmp, target);
     }catch{/* Keep the user's HUD visible even when local telemetry cannot be saved. */}
     if(process.argv[2]==='usage'){
-      const index=process.argv.indexOf('--delegate'),command=index>=0?process.argv[index+1]:null;
+      const index=process.argv.indexOf('--delegate'),encoded=process.argv.indexOf('--delegate-base64'),command=encoded>=0?Buffer.from(process.argv[encoded+1]||'','base64').toString('utf8'):index>=0?process.argv[index+1]:null;
       const hud=command?await renderStatusLine(command,input,{signal:cancellation.signal}):'';
       if(hud)process.stdout.write(hud);
       else if(process.env.ACCOUNTOR_ACCOUNT_PROVIDER!=='custom') {

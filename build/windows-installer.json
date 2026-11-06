@@ -1,0 +1,7 @@
+{
+  "appId": "local.claude-accountor.desktop",
+  "productName": "WbSpace",
+  "directories": {"output": "release/windows"},
+  "win": {"target": [{"target": "nsis", "arch": ["x64"]}], "icon": "assets/wbspace.ico", "requestedExecutionLevel": "asInvoker", "signAndEditExecutable": false, "artifactName": "WbSpace-${version}-windows-x64-setup.exe"},
+  "nsis": {"oneClick": false, "perMachine": false, "allowElevation": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "createStartMenuShortcut": true, "shortcutName": "WbSpace", "deleteAppDataOnUninstall": false, "runAfterFinish": false, "differentialPackage": false, "installerIcon": "assets/wbspace.ico", "uninstallerIcon": "assets/wbspace.ico"}
+}

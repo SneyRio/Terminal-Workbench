@@ -1,6 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const platformTools=require('./platform.cjs');
 const {pruneDeleted}=require('./session-history.cjs');
 const {migrateEmbedded}=require('./session-titles.cjs');
 const {ensureWorkspaceOrder}=require('./workspace-order.cjs');
@@ -9,7 +10,7 @@ const id = () => crypto.randomUUID();
 const hash = data => crypto.createHash('sha256').update(data).digest('hex');
 const fingerprint = stat => [stat.dev,stat.ino,stat.size,stat.mtimeMs,stat.ctimeMs,stat.mode].join(':');
 const inside = (root, target) => target === root || (!path.relative(root, target).startsWith('..' + path.sep) && path.relative(root, target) !== '..' && !path.isAbsolute(path.relative(root, target)));
-const defaults = () => ({ version: 1, workspaces: [], deletedWorkspaces: [], accounts: [], sessions: [], settings: { theme: 'system',navigationCollapsed:false, background: '', opacity: 30, fontFamily:'JetBrains Mono',terminalFontVersion:1,lineHeight:1.3,terminalRenderer:'classic', claudePath: '', shell: '/bin/zsh', fontSize: 14 }, drafts: {}, selectedWorkspace: '', operations: [] });
+const defaults = () => ({ version: 1, workspaces: [], deletedWorkspaces: [], accounts: [], sessions: [], settings: { theme: 'system',navigationCollapsed:false, background: '', opacity: 30, fontFamily:'JetBrains Mono',terminalFontVersion:1,lineHeight:1.3,terminalRenderer:'classic', claudePath: '', shell: platformTools.defaultShell(), fontSize: 14 }, drafts: {}, selectedWorkspace: '', operations: [] });
 
 async function atomicJson(file, value) {
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -105,9 +106,10 @@ class Store {
 
 function cleanEnv(source, accountDir) {
   const env = { ...source };
-  for (const k of Object.keys(env)) if (/^(ANTHROPIC_|CLAUDE_CODE_|CLAUDE_CONFIG_DIR$|CLAUDECODE$|ACCOUNTOR_)/.test(k)) delete env[k];
+  for (const k of Object.keys(env)) if (/^(ANTHROPIC_|CLAUDE_CODE_|CLAUDE_CONFIG_DIR$|CLAUDECODE$|ACCOUNTOR_)/i.test(k)) delete env[k];
   if (accountDir) env.CLAUDE_CONFIG_DIR = accountDir;
-  if(process.platform==='darwin')env.BROWSER='/usr/bin/open';
+  if(process.platform==='win32'){for(const key of Object.keys(env))if(key.toLowerCase()==='browser')delete env[key];}
+  Object.assign(env,platformTools.browserSettings());
   env.TERM = 'xterm-256color'; env.COLORTERM = 'truecolor';
   return env;
 }

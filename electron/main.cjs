@@ -21,6 +21,7 @@ const exec = promisify(execFile);
 const profileDiscovery=require('./profile-discovery.cjs');
 const {backupBeforeUpgrade}=require('./release-support.cjs');
 const updates=require('./updates.cjs');
+const platformTools=require('./platform.cjs');
 const {Connections,connection}=require('./account-connections.cjs');
 const root = path.resolve(__dirname, '..');
 // Keep the established safeStorage/Keychain namespace across the public rebrand.
@@ -44,14 +45,14 @@ const argvString = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
 function cliEnv(configDirectory) {
   const env=cleanEnv(process.env,configDirectory);
   // Finder launches do not inherit the interactive shell's CLI search path.
-  env.PATH=[path.join(os.homedir(),'.local/bin'),'/opt/homebrew/bin','/usr/local/bin',process.env.PATH||'/usr/bin:/bin:/usr/sbin:/sbin'].join(path.delimiter);
+  const expanded=platformTools.searchPath(process.env);for(const key of Object.keys(env))if(key.toLowerCase()==='path')delete env[key];env[process.platform==='win32'?'Path':'PATH']=expanded;
   return env;
 }
 
 async function executable() {
   const configured = store.state.settings.claudePath;
-  if(configured){try{await fs.access(configured,1);return configured;}catch{throw new Error('配置的 Claude CLI 路径不可执行，请在设置中修正');}}
-  const options = [configured, path.join(os.homedir(), '.local/bin/claude'), '/opt/homebrew/bin/claude', '/usr/local/bin/claude', ...(process.env.PATH || '').split(path.delimiter).map(d => path.join(d, 'claude'))].filter(Boolean);
+  if(configured){if(process.platform==='win32'&&!/\.exe$/i.test(configured))throw new Error('Windows 请选择原生 claude.exe；不直接执行 .cmd/.bat 启动脚本');try{await fs.access(configured,1);return configured;}catch{throw new Error('配置的 Claude CLI 路径不可执行，请在设置中修正');}}
+  const options = platformTools.executableCandidates(configured);
   for (const option of options) { try { await fs.access(option, 1); return option; } catch {} }
   throw new Error('未找到 Claude CLI，请在设置中指定已安装的可执行文件');
 }
@@ -78,7 +79,7 @@ async function checkAccount(accountId) {
   try {
     const account=store.account(accountId);
     if(account.connection){await connections.env(account);await accountExecutable(account);await store.update(s=>Object.assign(s.accounts.find(a=>a.id===accountId),{status:'valid',authMethod:'custom-config',checkedAt:Date.now(),error:''}));pushState();return store.account(accountId);}
-    const { stdout } = await exec(await accountExecutable(store.account(accountId)), ['auth', 'status', '--json'], { env: cliEnv(accountDir(accountId)), timeout: 15000, maxBuffer: 256 * 1024 });
+    const { stdout } = await exec(await accountExecutable(store.account(accountId)), ['auth', 'status', '--json'], { env: cliEnv(accountDir(accountId)), windowsHide:true,timeout: 15000, maxBuffer: 256 * 1024 });
     const data = JSON.parse(stdout);
     if(typeof data.loggedIn!=='boolean')throw new Error('Invalid auth status');
       await store.update(s => { const a=s.accounts.find(a => a.id === accountId);if(!a)return;const identity=data.accountId||data.accountUuid||(data.email?data.email.toLowerCase()+'|'+(data.orgId||''):'');Object.assign(a,{status:data.loggedIn?'valid':'login',email:data.email||'',authMethod:data.authMethod,identity,duplicateOf:identity?s.accounts.find(other=>other.id!==accountId&&other.identity===identity)?.id:undefined,checkedAt:Date.now(),error:''}); });
@@ -133,23 +134,23 @@ async function startSession(input) {
   const metadataPath = path.join(telemetryDir, sessionId + '-event.json');
   const env = {...cliEnv(acct ? accountDir(acct.id) : null),...(acct?await connections.env(acct):{})};
   // Login must use the user's macOS default browser, never an embedded webview or a named browser.
-  if(process.platform==='darwin')env.BROWSER='/usr/bin/open';
-  env.PATH = [path.join(os.homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', process.env.PATH].filter(Boolean).join(path.delimiter);
-  let file = store.state.settings.shell || '/bin/zsh', args = ['-l'];
+  Object.assign(env,platformTools.browserSettings());
+  let file = store.state.settings.shell || platformTools.defaultShell(), args = platformTools.shellArgs(file);
   if (acct) {
     if(acct.source!=='existing')await installTelemetry(acct.id);
     file = await accountExecutable(acct);
-    const telemetry = [argvString(process.execPath), argvString(path.join(root, 'scripts/claude-telemetry.cjs'))].join(' ');
+    const telemetryScript=path.join(root,'scripts/claude-telemetry.cjs');
     env.ELECTRON_RUN_AS_NODE = '1';
     env.ACCOUNTOR_ACCOUNT_PROVIDER = acct.provider || 'subscription';
     env.ACCOUNTOR_RUN_ID = sessionId; env.ACCOUNTOR_TELEMETRY_DIR = telemetryDir;
     if(kind==='login'&&acct.provider==='custom')throw new Error('自定义供应商使用 API Key / Token，请在连接详情中编辑');
-    if (kind === 'login') args = ['--settings',JSON.stringify({env:{BROWSER:'/usr/bin/open'}}),'auth', 'login', '--claudeai'];
+    if (kind === 'login') args = ['--settings',JSON.stringify({env:platformTools.browserSettings()}),'auth', 'login', '--claudeai'];
     else {
-      const settings = { hooks: {},...(backend==='embedded'?{tui:store.state.settings.terminalRenderer==='fullscreen'?'fullscreen':'default'}:{}),env:{...(backend==='embedded'&&store.state.settings.terminalRenderer!=='fullscreen'?{CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN:'1'}:{}),BROWSER:'/usr/bin/open',...(acct.command==='claude-dp'?{ENABLE_TOOL_SEARCH:'false'}:{})} };
-      for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd']) settings.hooks[event] = [{ hooks: [{ type: 'command', command: telemetry + ' event' }] }];
+      const settings = { hooks: {},...(backend==='embedded'?{tui:store.state.settings.terminalRenderer==='fullscreen'?'fullscreen':'default'}:{}),env:{...(backend==='embedded'&&store.state.settings.terminalRenderer!=='fullscreen'?{CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN:'1'}:{}),...platformTools.browserSettings(),...(acct.command==='claude-dp'?{ENABLE_TOOL_SEARCH:'false'}:{})} };
       const originalStatusLine=await configuredStatusLine(accountDir(acct.id));
-      settings.statusLine = {...(originalStatusLine||{}),type:'command',command:telemetry+' usage'+(originalStatusLine?' --delegate '+argvString(originalStatusLine.command):'')};
+      const telemetry=platformTools.hookSettings(process.execPath,telemetryScript,originalStatusLine);
+      for(const event of ['SessionStart','UserPromptSubmit','Stop','SessionEnd'])settings.hooks[event]=[{hooks:[telemetry.event]}];
+      settings.statusLine=telemetry.statusLine;
       args = ['--no-chrome','--settings', JSON.stringify(settings)];
       if(acct.connection)args.push('--model',acct.connection.defaultModel);
       const extra = [];
@@ -162,6 +163,7 @@ async function startSession(input) {
       if (extra.length) args.push('--add-dir', ...extra);
     }
   }
+  if(process.platform==='win32'&&acct&&!/\.exe$/i.test(file))throw new Error('Windows 请选择原生 Claude CLI 可执行文件 claude.exe');
   if(!path.isAbsolute(file))throw new Error('请设置终端可执行文件的绝对路径');
   try{await fs.access(file,1);}catch{throw new Error('终端可执行文件不存在或无执行权限：'+file);}
   const record = { id: sessionId, workspaceId: workspace?.id || '', accountId: acct?.id || '', kind, backend, cwd, projects, pendingRestore:input.restoreSourceId,checkpoint:input.resumeFile||input.checkpointFile, handoffFile:input.handoffFile||input.inheritedHandoffFile, title: kind === 'login' ? '登录 · ' + acct.name : kind === 'shell' ? 'Shell' : 'Claude · ' + acct.name, createdAt: Date.now(), status: 'starting', groupId: input.groupId || sessionId, orientation: input.orientation || 'horizontal', authVerified:acct?store.account(acct.id).status==='valid':false, recovery:input.handoffFile?'handoff':input.resumeId || input.resumeFile ? 'requested' : undefined };
@@ -570,11 +572,11 @@ function registerHandlers() {
   });
   register('settings:background-data', async () => { const file=store.state.settings.background; if(!file)return ''; try { const ext=path.extname(file); return `data:image/${['.jpg','.jpeg'].includes(ext)?'jpeg':ext.slice(1)};base64,${(await fs.readFile(file)).toString('base64')}`; } catch { return ''; } });
   register('system:info', async () => ({version:app.getVersion(),tools:agentTools,plannedTools,platform:process.platform,arch:process.arch,claude:await executable().catch(()=>''),dataRoot,profiles:await profileDiscovery.discover(),releaseChannel:require('../package.json').releaseChannel||'unsigned-beta'}));
-  register('setup:cli',async()=>{const pick=await dialog.showOpenDialog(win,{title:'选择 Claude CLI 可执行文件',properties:['openFile','showHiddenFiles']});if(pick.canceled)return null;const file=await fs.realpath(pick.filePaths[0]);await fs.access(file,1);if(!(await fs.stat(file)).isFile())throw new Error('请选择可执行文件');await store.update(s=>{s.settings.claudePath=file;});pushState();return file;});
+  register('setup:cli',async()=>{const pick=await dialog.showOpenDialog(win,{title:'选择 Claude CLI 可执行文件',properties:['openFile','showHiddenFiles']});if(pick.canceled)return null;const file=await fs.realpath(pick.filePaths[0]);if(process.platform==='win32'&&!/\.exe$/i.test(file))throw new Error('请选择原生 claude.exe，不支持直接选择 .cmd/.bat');await fs.access(file,1);if(!(await fs.stat(file)).isFile())throw new Error('请选择可执行文件');await store.update(s=>{s.settings.claudePath=file;});pushState();return file;});
   register('setup:finish',async()=>{await store.update(s=>{s.onboarding={completedAt:Date.now()};});pushState();});
   register('updates:check',()=>updates.check(app.getVersion()));
   register('data:backup',async()=>{await draftWrites.flush();await store.queue;const dir=await backupBeforeUpgrade(dataRoot,'manual-'+Date.now());return dir;});
-  register('data:show-backups',async()=>{const dir=path.join(dataRoot,'backups.noindex');await fs.mkdir(dir,{recursive:true,mode:0o700});const error=await shell.openPath(dir);if(error)throw new Error('无法打开备份目录，请通过 Finder 访问应用数据目录');});
+  register('data:show-backups',async()=>{const dir=path.join(dataRoot,'backups.noindex');await fs.mkdir(dir,{recursive:true,mode:0o700});const error=await shell.openPath(dir);if(error)throw new Error('无法打开备份目录，请通过系统文件管理器访问应用数据目录');});
   register('external:open', url => { const parsed=new URL(url); if(!['https:','http:'].includes(parsed.protocol))throw new Error('不支持的链接'); return shell.openExternal(parsed.href); });
 }
 
@@ -602,21 +604,22 @@ async function pollTelemetry(sessionIds) {
 }
 
 async function createWindow() {
-  win=new BrowserWindow({width:1480,height:980,minWidth:960,minHeight:640,title:'WbSpace',icon:path.join(root,'dist/app-icon-v1.png'),backgroundColor:'#f4f4f7',titleBarStyle:'hiddenInset',webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
+  win=new BrowserWindow({width:1480,height:980,minWidth:960,minHeight:640,title:'WbSpace',icon:path.join(root,'dist/app-icon-v1.png'),backgroundColor:'#f4f4f7',titleBarStyle:process.platform==='darwin'?'hiddenInset':'default',autoHideMenuBar:process.platform==='win32',webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
   win.webContents.setWindowOpenHandler(({url})=> { if(/^https?:/.test(url))shell.openExternal(url); return {action:'deny'}; });
   win.webContents.on('will-navigate',(event,url)=> { const expected=process.env.ACCOUNTOR_DEV_URL; if(expected?new URL(url).origin!==new URL(expected).origin:new URL(url).href.split(/[?#]/)[0]!==pathToFileURL(path.join(root,'dist/index.html')).href)event.preventDefault(); });
-  win.on('close',e=> { if(!quitting){e.preventDefault(); win.hide();} });
+  win.on('close',e=> {if(!quitting){e.preventDefault();if(process.platform==='win32')app.quit();else win.hide();}});
   if(process.env.ACCOUNTOR_DEV_URL)await win.loadURL(process.env.ACCOUNTOR_DEV_URL); else await win.loadFile(path.join(root,'dist/index.html'));
   if(process.env.ACCOUNTOR_SCREENSHOT) setTimeout(()=>win.capturePage().then(im=>fs.writeFile(process.env.ACCOUNTOR_SCREENSHOT,im.toPNG())),1200);
 }
 
+if(process.platform==='win32')app.setAppUserModelId('local.claude-accountor.desktop');
 const ownsInstance=app.requestSingleInstanceLock();
 if(!ownsInstance)app.exit(0);
 app.on('second-instance',()=>{if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
 
 app.whenReady().then(async()=> {
   try {
-    if(app.isPackaged&&!process.env.ACCOUNTOR_DATA_DIR)for(const legacy of ['/Applications/Claude Accountor.app','/Applications/终端工作站.app']){
+    if(process.platform==='darwin'&&app.isPackaged&&!process.env.ACCOUNTOR_DATA_DIR)for(const legacy of ['/Applications/Claude Accountor.app','/Applications/终端工作站.app']){
       if(!existsSync(legacy))continue;const old=await inspectLegacy(legacy);
       if(old.mainRunning){dialog.showErrorBox('请先退出旧应用',path.basename(legacy,'.app')+' 仍在运行。请先按 ⌘Q 退出旧应用，再打开 WbSpace，现有数据会自动保留。');quitting=true;app.quit();return;}
       await retireLegacy(legacy,path.join(dataRoot,'legacy-builds.noindex',path.basename(legacy,'.app')+'-before-'+Date.now()+'.app')).catch(()=>{});
@@ -644,7 +647,7 @@ app.whenReady().then(async()=> {
     await refreshTitles();
     registerHandlers();
     setInterval(()=>{void expireDeleted().catch(()=>{});},60000).unref();
-    Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'WbSpace',submenu:[{role:'about'},{type:'separator'},{label:'退出 WbSpace',accelerator:'CmdOrCtrl+Q',click:()=>app.quit()}]},{label:'编辑',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{label:'复制',accelerator:'CmdOrCtrl+C',click:()=>notify('clipboard:copy-request')},{role:'paste'},{role:'selectAll'}]},{role:'viewMenu'},{role:'windowMenu'}]));
+    Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'WbSpace',submenu:[{role:'about'},{type:'separator'},{label:'退出 WbSpace',accelerator:'CmdOrCtrl+Q',click:()=>app.quit()}]},{label:'编辑',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{label:'复制',accelerator:process.platform==='win32'?'Ctrl+Shift+C':'CmdOrCtrl+C',click:()=>notify('clipboard:copy-request')},{role:'paste'},{role:'selectAll'}]},{role:'viewMenu'},{role:'windowMenu'}]));
     await createWindow();
     let polling=false;
     setInterval(async()=>{if(polling)return;polling=true;try{await pollTelemetry();}finally{polling=false;}},2000).unref();

@@ -5,7 +5,7 @@ const {promisify}=require('node:util');
 const {inside}=require('./core.cjs');
 const exec=promisify(execFile);
 async function git(directory,args){
-  const {stdout}=await exec('git',['--no-optional-locks','--literal-pathspecs','-c','core.fsmonitor=false','-c','core.quotepath=false','-C',directory,...args],{env:{...process.env,GIT_OPTIONAL_LOCKS:'0'},timeout:10000,maxBuffer:4*1024*1024});return stdout;
+  const {stdout}=await exec('git',['--no-optional-locks','--literal-pathspecs','-c','core.fsmonitor=false','-c','core.quotepath=false','-C',directory,...args],{windowsHide:true,env:{...process.env,GIT_OPTIONAL_LOCKS:'0'},timeout:10000,maxBuffer:4*1024*1024});return stdout;
 }
 function parseStatus(raw){
   const parts=raw.split('\0'),entries=[];

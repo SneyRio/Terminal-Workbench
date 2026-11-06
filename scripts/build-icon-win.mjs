@@ -1,0 +1,3 @@
+import fs from 'node:fs/promises';
+const png=await fs.readFile('public/app-icon-v1.png'),width=png.readUInt32BE(16),height=png.readUInt32BE(20);if(width>256||height>256)throw new Error('Windows icon PNG must be 256px or smaller');
+const header=Buffer.alloc(22);header.writeUInt16LE(1,2);header.writeUInt16LE(1,4);header[6]=width===256?0:width;header[7]=height===256?0:height;header.writeUInt16LE(1,10);header.writeUInt16LE(32,12);header.writeUInt32LE(png.length,14);header.writeUInt32LE(22,18);await fs.writeFile('assets/wbspace.ico',Buffer.concat([header,png]));console.log('Generated Windows ICO from bundled icon PNG.');

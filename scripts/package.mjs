@@ -1,7 +1,9 @@
 import { packager } from '@electron/packager';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-const identity=process.env.TW_SIGN_IDENTITY,profile=process.env.TW_NOTARY_PROFILE;
+const target=process.env.TW_TARGET_PLATFORM||process.platform,arch=target==='win32'?'x64':'arm64';
+if(!['win32','darwin'].includes(target))throw new Error('Supported package targets are Windows x64 and macOS arm64');
+const identity=target==='darwin'?process.env.TW_SIGN_IDENTITY:undefined,profile=target==='darwin'?process.env.TW_NOTARY_PROFILE:undefined;
 if(process.env.TW_REQUIRE_SIGNING==='1'&&!identity)throw new Error('缺少 Developer ID Application 签名身份，未生成正式发布包');
 if(profile&&!identity)throw new Error('公证必须先配置 Developer ID 签名');
 if(identity&&!identity.startsWith('Developer ID Application:'))throw new Error('请使用 Developer ID Application 证书');
@@ -15,5 +17,7 @@ for(const file of ['claude-telemetry.cjs'])await fs.copyFile(path.join(root,'scr
 await fs.mkdir(path.join(stage,'node_modules'),{recursive:true});
 await fs.cp(path.join(root,'node_modules/node-pty'),path.join(stage,'node_modules/node-pty'),{recursive:true});
 await fs.writeFile(path.join(stage,'package.json'),JSON.stringify({name:'wbspace',version,releaseChannel:identity?(profile?'notarized':'signed'):'unsigned-beta',main:'electron/main.cjs',description:'Local workspaces for agent CLIs',author:'WbSpace',license:'UNLICENSED'}));
-const result=await packager({dir:stage,out:path.join(root,'release','builds.noindex'),name:'WbSpace',appBundleId:'local.claude-accountor.desktop',platform:'darwin',arch:'arm64',electronVersion:'45.2.2',icon:path.join(root,'assets/claude-accountor.icns'),overwrite:true,prune:false,asar:false,download:{cacheRoot:'/private/tmp/claude-accountor-electron'},osxSign:identity?{identity,optionsForFile:()=>({hardenedRuntime:true,entitlements:path.join(root,'build/entitlements.mac.plist')})}:{identity:'-',identityValidation:false,preAutoEntitlements:false,optionsForFile:()=>({hardenedRuntime:false,entitlements:path.join(root,'build/entitlements.mac.plist')})},osxNotarize:profile?{keychainProfile:profile}:undefined});
+if(target==='win32'&&process.platform!=='win32')await fs.rm(path.join(stage,'node_modules/node-pty/build'),{recursive:true,force:true});
+const macOptions=target==='darwin'?{osxSign:identity?{identity,optionsForFile:()=>({hardenedRuntime:true,entitlements:path.join(root,'build/entitlements.mac.plist')})}:{identity:'-',identityValidation:false,preAutoEntitlements:false,optionsForFile:()=>({hardenedRuntime:false,entitlements:path.join(root,'build/entitlements.mac.plist')})},osxNotarize:profile?{keychainProfile:profile}:undefined}:{};
+const result=await packager({dir:stage,out:path.join(root,'release','builds.noindex'),name:'WbSpace',appBundleId:'local.claude-accountor.desktop',platform:target,arch,electronVersion:'45.2.2',icon:path.join(root,target==='win32'?'assets/wbspace.ico':'assets/claude-accountor.icns'),overwrite:true,prune:false,asar:false,download:process.platform==='darwin'?{cacheRoot:'/private/tmp/claude-accountor-electron'}:undefined,...macOptions});
 console.log(result.join('\n'));

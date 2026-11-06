@@ -1,6 +1,7 @@
 const fs=require('node:fs/promises');
 const path=require('node:path');
 const {spawn}=require('node:child_process');
+const {hudShell}=require('./platform.cjs');
 async function configuredStatusLine(configDirectory){
   try{
     const settings=JSON.parse(await fs.readFile(path.join(configDirectory,'settings.json'),'utf8'));
@@ -12,8 +13,9 @@ async function configuredStatusLine(configDirectory){
 function renderStatusLine(command,input,{env=process.env,cwd=process.cwd(),timeout=8000,signal}={}){
   return new Promise(resolve=>{
     let output='',done=false,overflow=false;
-    const child=spawn('/bin/sh',['-c',command],{env,cwd,detached:true,stdio:['pipe','pipe','ignore']});
-    const kill=()=>{if(child.pid)try{process.kill(-child.pid,'SIGTERM');}catch{}};
+    const spec=hudShell(env);const text=spec.powershell?'[Console]::InputEncoding=[Text.Encoding]::UTF8; [Console]::OutputEncoding=[Text.Encoding]::UTF8; '+command:command;
+    const child=spawn(spec.file,[...spec.args,text],{env,cwd,detached:spec.detached,windowsHide:true,stdio:['pipe','pipe','ignore']});
+    const kill=()=>{if(child.pid)try{if(process.platform==='win32')spawn('taskkill.exe',['/pid',String(child.pid),'/t','/f'],{windowsHide:true,stdio:'ignore'}).on('error',()=>{});else process.kill(-child.pid,'SIGTERM');}catch{}};
     const finish=value=>{if(done)return;done=true;clearTimeout(timer);signal?.removeEventListener('abort',cancel);resolve(value);};
     const cancel=()=>{kill();finish('');};
     const timer=setTimeout(cancel,timeout);

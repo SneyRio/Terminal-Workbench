@@ -13,7 +13,8 @@ export function TerminalPane({ session, active, dark, fontSize, fontFamily='JetB
   const terminal = useRef<Terminal | null>(null);
   const search = useRef<SearchAddon | null>(null);
   const resizeRef=useRef<(()=>void)|null>(null);
-  const family=(name:string)=>name==='JetBrains Mono'?'"Accountor JetBrains Mono", "PingFang SC", "Microsoft YaHei", monospace':name==='system'?'"SFMono-Regular", Menlo, Monaco, Consolas, monospace':name+', monospace';
+  const windows=navigator.platform.startsWith('Win');
+  const family=(name:string)=>name==='JetBrains Mono'?'"Accountor JetBrains Mono", "PingFang SC", "Microsoft YaHei", monospace':name==='system'?(windows?'Consolas, "Cascadia Code", monospace':'"SFMono-Regular", Menlo, Monaco, Consolas, monospace'):name+', monospace';
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState('');
   const darkTheme = { background: '#00000000', foreground: '#e4e4ee', cursor: '#b1a5ff', selectionBackground: '#b6a2ee', selectionForeground:'#15131f', selectionInactiveBackground:'#9383c2', black:'#30303c', red:'#ef8d91',green:'#a0d5ae',yellow:'#dfcf97',blue:'#a3b6ee',magenta:'#c9adea',cyan:'#91d3d7',white:'#eeedf5' };
@@ -57,7 +58,7 @@ export function TerminalPane({ session, active, dark, fontSize, fontFamily='JetB
     resizeRef.current=resize;
     const observer = new ResizeObserver(resize); observer.observe(host.current);
     term.attachCustomKeyEventHandler(event => {
-      if((event.metaKey||event.ctrlKey&&event.shiftKey)&&event.key.toLowerCase()==='c'){if(event.type==='keydown')copy();return false;}
+      if((event.metaKey||event.ctrlKey&&(event.shiftKey||windows&&term.hasSelection()))&&event.key.toLowerCase()==='c'){if(event.type==='keydown')copy();return false;}
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') { if (event.type === 'keydown') setSearching(true); return false; } return true;
     });
     requestAnimationFrame(resize);

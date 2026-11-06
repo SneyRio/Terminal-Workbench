@@ -1,0 +1,43 @@
+name: Windows x64
+on:
+  push:
+    branches: [main, codex/windows-support]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: node node_modules/electron/install.js
+      - run: npm run rebuild:native
+      - run: node --test tests/platform.test.cjs tests/release-readiness.test.cjs tests/performance.test.cjs tests/session-history.test.cjs tests/session-titles.test.cjs
+      - run: npm run package:win
+      - run: ./scripts/build-windows-fixture.ps1
+      - run: npm run test:windows
+      - run: node scripts/release-windows.mjs
+      - run: node scripts/windows-installer-smoke.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-validation
+          path: test-results/windows-*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WbSpace-windows-x64
+          path: |
+            release/windows/*-setup.exe
+            release/windows/*-portable.zip
+            release/windows/SHA256SUMS.txt
+            release/windows/release-manifest.json
+            release/windows/安装说明.txt
+          if-no-files-found: error
