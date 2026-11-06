@@ -172,7 +172,7 @@ async function startSession(input) {
   await store.update(s => { s.sessions.push(record); }); pushState();
   {
     try {
-      const proc = pty.spawn(file, args, { name: 'xterm-256color', cols: 100, rows: 32, cwd, env });
+      const proc = pty.spawn(file, args, { ...(process.platform==='win32'?{useConptyDll:true}:{}),name: 'xterm-256color', cols: 100, rows: 32, cwd, env });
       const runtime = { proc,history:new TerminalHistory(),pending:[],pendingSize:0,outputTimer:null,seq:0,timer:null };
       terminals.set(sessionId, runtime);
       if(kind==='login')runtime.timer=setInterval(()=>{void statusAccount(acct.id).catch(()=>{});},3000);
@@ -246,6 +246,10 @@ async function performRestore(sid,fromTrash){
   if(source.pendingRestore)throw new Error('此会话正在恢复，请等待完成');
   if(source.requiresExternalExit){const choice=await dialog.showMessageBox(win,{type:'warning',message:'在内置终端恢复历史会话？',detail:'此历史会话原本在外部终端运行。请先结束旧窗口中的 CLI，避免同时操作同一个原生对话。旧窗口不会由本工具关闭。',buttons:['取消','已结束旧 CLI，继续恢复'],defaultId:0,cancelId:0});if(choice.response!==1)return null;}
   const runtime=terminals.get(sid);
+  if(!fromTrash&&runtime&&!runtime.closed&&source.status==='exited'){
+    const deadline=Date.now()+5000;while(!runtime.closed&&Date.now()<deadline)await new Promise(r=>setTimeout(r,50));
+    if(!runtime.closed)throw new Error('原终端正在退出，请稍后再恢复');
+  }
   if(!fromTrash&&((runtime&&!runtime.closed))){
     await store.update(s=>{const w=s.workspaces.find(w=>w.id===source.workspaceId);if(w){s.selectedWorkspace=w.id;w.selectedSession=sid;w.hiddenGroups=(w.hiddenGroups||[]).filter(g=>g!==source.groupId);}});pushState();return source;
   }
