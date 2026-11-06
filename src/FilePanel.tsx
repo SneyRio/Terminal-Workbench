@@ -48,6 +48,13 @@ function JsonTree({ value, label, depth=0 }: { value: any; label?: string; depth
   return <details open={depth<2} className="json-tree"><summary>{label!==undefined?label+': ':''}{Array.isArray(value)?`Array (${entries.length})`:`Object (${entries.length})`}</summary><div>{entries.slice(0,1000).map(([key,v])=><JsonTree key={key} value={v} label={key} depth={depth+1}/>)}</div></details>;
 }
 
+function localLinkTarget(href:string,file:string){
+  const normalized=file.replaceAll('\\','/'),base=new URL('file:///');
+  if(normalized.startsWith('//')){const slash=normalized.indexOf('/',2);base.hostname=normalized.slice(2,slash);base.pathname=normalized.slice(slash);}else base.pathname=normalized.startsWith('/')?normalized:'/'+normalized;
+  const target=new URL(href,base);if(target.protocol!=='file:')throw new Error('仅支持工作空间内的本地文件');
+  const decoded=decodeURIComponent(target.pathname);return target.hostname?'//'+target.hostname+decoded:decoded.replace(/^\/(?=[A-Za-z]:\/)/,'');
+}
+
 function Preview({ file, text, workspace, onOpen }: { file: OpenFile; text: string; workspace: Workspace; onOpen: (path:string)=>void }) {
   const [markdownHtml,setMarkdownHtml]=useState('');
   useEffect(()=>{
@@ -64,7 +71,7 @@ function Preview({ file, text, workspace, onOpen }: { file: OpenFile; text: stri
       const href=img.getAttribute('data-local-image')||'';
       if(/^(https?:|data:|javascript:|\/\/)/i.test(href)){img.replaceWith(doc.createTextNode(`[图片未自动加载：${img.getAttribute('alt')||href}]`));return;}
       try{
-        const target=decodeURIComponent(new URL(href,'file://'+file.path).pathname);
+        const target=localLinkTarget(href,file.path);
         const image=await call<OpenFile>('files:read',workspace.id,target);
         if(image.image)img.setAttribute('src',image.image);else img.replaceWith(doc.createTextNode('[图片无法预览]'));
       }catch{img.replaceWith(doc.createTextNode('[图片不在可访问的工作空间内]'));}
@@ -73,7 +80,7 @@ function Preview({ file, text, workspace, onOpen }: { file: OpenFile; text: stri
   },[file.path,text,workspace.id]);
   if (file.image) return <div className="image-preview"><img src={file.image} alt={nameOf(file.path)}/><small>{(file.size / 1024).toFixed(1)} KiB</small></div>;
   if (/\.md$/i.test(file.path)) {
-    return <article className="markdown-preview" onClick={e => { const a = (e.target as HTMLElement).closest('a'); if (a) { e.preventDefault(); const href=a.getAttribute('href')||''; if(/^https?:/i.test(href))void call('external:open',href);else if(href&&!href.startsWith('#'))try{onOpen(decodeURIComponent(new URL(href,'file://'+file.path).pathname));}catch{} } }} dangerouslySetInnerHTML={{ __html: markdownHtml }}/>;
+    return <article className="markdown-preview" onClick={e => { const a = (e.target as HTMLElement).closest('a'); if (a) { e.preventDefault(); const href=a.getAttribute('href')||''; if(/^https?:/i.test(href))void call('external:open',href);else if(href&&!href.startsWith('#'))try{onOpen(localLinkTarget(href,file.path));}catch{} } }} dangerouslySetInnerHTML={{ __html: markdownHtml }}/>;
   }
   if (/\.(csv|tsv)$/i.test(file.path)) {
     const rows = Papa.parse<string[]>(text, { delimiter: /\.tsv$/i.test(file.path) ? '\t' : ',', preview: 501 }).data;
@@ -115,8 +122,8 @@ export function FilePanel({ workspace, state, dark, onError, maximized, onMaximi
     const result:Record<string,Decoration>={};
     for(const [directory,snapshot] of Object.entries(gitSnapshots))for(const entry of snapshot.entries){
       const kind=gitStatusKind(entry);result[entry.absolutePath]={kind,label:gitStatusLabel(entry)};
-      let parent=entry.absolutePath.slice(0,entry.absolutePath.lastIndexOf('/'));
-      while(parent===directory||parent.startsWith(directory+'/')){const previous=result[parent]?.kind;const combined=kind==='conflict'||previous==='conflict'?'conflict':previous&&previous!==kind?'modified':kind;result[parent]={kind:combined,label:combined==='conflict'?'目录内存在冲突':'目录内有文件变更'};if(parent===directory)break;parent=parent.slice(0,parent.lastIndexOf('/'));}
+      const sep=directory.includes('\\')?'\\':'/';let parent=entry.absolutePath.slice(0,entry.absolutePath.lastIndexOf(sep));
+      while(parent===directory||parent.startsWith(directory+sep)){const previous=result[parent]?.kind;const combined=kind==='conflict'||previous==='conflict'?'conflict':previous&&previous!==kind?'modified':kind;result[parent]={kind:combined,label:combined==='conflict'?'目录内存在冲突':'目录内有文件变更'};if(parent===directory)break;parent=parent.slice(0,parent.lastIndexOf(sep));}
     }return result;
   },[gitSnapshots]);
   const buffersRef = useRef(buffers); buffersRef.current = buffers;

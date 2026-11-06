@@ -83,7 +83,7 @@ class Store {
   async saveUnlocked(workspaceId, file, text, version) {
     if (typeof text !== 'string' || Buffer.byteLength(text) > 2 * 1024 * 1024) throw new Error('文件超过完整编辑限额');
     const real = await this.resolveFile(workspaceId, file);
-    const handle = await fs.open(real, 'r+');
+    const handle = await fs.open(real, 'r+');let closed=false;
     // Keep identity stable across symlink swaps and detect external writes before committing.
     try {
       const before = await handle.readFile();
@@ -95,12 +95,13 @@ class Store {
       const tmp = path.join(path.dirname(real), '.' + path.basename(real) + '.accountor-' + id());
       try {
         await fs.writeFile(tmp, text, { mode: stat.mode & 0o777 });
+        if(process.platform==='win32'){await handle.close();closed=true;const rechecked=await fs.stat(real);if(rechecked.ino!==stat.ino||rechecked.dev!==stat.dev)throw new Error('文件已被替换，请重新加载后保存');}
         const latest = await fs.readFile(real);
         if (hash(latest) !== version) return { conflict: true, disk: latest.toString('utf8'), version: hash(latest) };
         await fs.rename(tmp, real);
       } finally { await fs.rm(tmp, { force: true }); }
       return { version: hash(Buffer.from(text)), saved: true };
-    } finally { await handle.close(); }
+    } finally { if(!closed)await handle.close(); }
   }
 }
 
