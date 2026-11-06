@@ -30,7 +30,7 @@
 
 ## 运行环境
 
-macOS Apple Silicon、Node.js 22.12+、Xcode Command Line Tools，以及自行安装的 Claude Code。当前本机验证环境为 macOS arm64；Windows 和 Linux 尚未验收。
+macOS Apple Silicon，或 Windows x64；开发需要 Node.js 22.12+、对应平台的 C++ 编译工具和自行安装的 Claude Code。Windows 适配及打包流程已加入，原生验收和发布状态见 [Windows 内测说明](docs/windows-beta.md)。Linux 尚未适配。
 
 ```sh
 npm ci
@@ -69,13 +69,13 @@ npm run rebuild:native
 
 网页登录始终交给系统默认浏览器；不会选择特定浏览器或使用内置网页登录。
 
-自定义服务当前需兼容 Anthropic Messages 协议，不直接接入普通 OpenAI 接口。密钥经 Electron safeStorage 使用系统安全存储加密后保存为本机 0600 文件，不进入普通状态或项目配置。编辑时密钥留空表示保留，修改在新启动/恢复的会话生效；检查配置只确认本地可用性，不发送推理请求。不同自定义服务间切换默认使用可预览的上下文交接。官方独立启动命令位于应用数据目录的 `bin/`，可在详情中复制完整路径；不会覆盖 `~/.local/bin` 的已有入口。
+自定义服务当前需兼容 Anthropic Messages 协议，不直接接入普通 OpenAI 接口。密钥经 Electron safeStorage 使用系统安全存储加密后保存为本机加密文件（macOS 权限 0600），不进入普通状态或项目配置。编辑时密钥留空表示保留，修改在新启动/恢复的会话生效；检查配置只确认本地可用性，不发送推理请求。不同自定义服务间切换默认使用可预览的上下文交接。官方独立启动命令位于应用数据目录的 `bin/`，可在详情中复制完整路径；不会覆盖 `~/.local/bin` 的已有入口。
 
 ## 数据与恢复边界
 
 认证由原 CLI 配置管理。引用已有入口不复制凭证，不改写原包装脚本或用户级 HUD。用量来自实际可用来源；“检查连接状态”不代表闲置账号额度已刷新，也不会通过模型请求探测余额。
 
-新安装的数据目录为 `~/Library/Application Support/Terminal Workbench`。从旧版 Claude Accountor 升级时继续使用旧数据目录，保留工作空间、账号引用、草稿和恢复资料。更名安装不会强行结束旧版进程；请先退出旧应用，再打开“终端工作站”。
+新安装的数据目录为 macOS `~/Library/Application Support/WbSpace`，Windows `%APPDATA%\WbSpace`。从旧版 Claude Accountor 升级时继续使用旧数据目录，保留工作空间、账号引用、草稿和恢复资料。更名安装不会强行结束旧版进程；请先退出旧应用，再打开 WbSpace。
 
 永久删除清除本工具的恢复记录和未被其他记录引用的专用检查点，不能再从本工具恢复；项目文件与原始 CLI 历史不会删除。Shell 恢复会创建同目录的新进程，不会复活已结束的命令。
 

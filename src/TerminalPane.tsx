@@ -27,7 +27,7 @@ export function TerminalPane({ session, active, dark, fontSize, fontFamily='JetB
     term.loadAddon(fit); term.loadAddon(find);
     term.loadAddon(new WebLinksAddon((_e, url) => { void call('external:open', url); }));
     term.open(host.current);
-    const syncViewport=()=>{if(host.current){host.current.dataset.viewport=String(term.buffer.active.viewportY);host.current.dataset.scrollback=String(term.buffer.active.baseY);host.current.dataset.bufferMode=term.buffer.active.type;}};
+    const syncViewport=()=>{if(host.current){host.current.dataset.viewport=String(term.buffer.active.viewportY);host.current.dataset.scrollback=String(term.buffer.active.baseY);host.current.dataset.bufferMode=term.buffer.active.type;host.current.dataset.cols=String(term.cols);host.current.dataset.rows=String(term.rows);}};
     const scrollState=term.onScroll(syncViewport),renderState=term.onRender(syncViewport),selectionState=term.onSelectionChange(()=>{if(host.current)host.current.dataset.hasSelection=String(term.hasSelection());});
     syncViewport();
     const copy=()=>{
