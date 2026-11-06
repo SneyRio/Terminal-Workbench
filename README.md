@@ -10,11 +10,11 @@
 
 ## 安装内测版
 
-[Windows x64 安装版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v0.4.0-win-beta.16/WbSpace-0.4.0-windows-x64-setup.exe) · [Windows x64 ZIP 解压版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v0.4.0-win-beta.16/WbSpace-0.4.0-windows-x64-portable.zip) · [macOS 0.3.0 历史 DMG](https://github.com/SneyRio/Terminal-Workbench/releases/download/v0.3.0-beta.1/WbSpace-0.3.0-mac-arm64-unsigned-beta.dmg)
+[Windows x64 安装版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v0.4.0-win-beta.16/WbSpace-0.4.0-windows-x64-setup.exe) · [Windows x64 ZIP 解压版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v0.4.0-win-beta.16/WbSpace-0.4.0-windows-x64-portable.zip) · [macOS Apple Silicon DMG](https://github.com/SneyRio/Terminal-Workbench/releases/download/v0.4.0-win-beta.16/WbSpace-0.4.0-mac-arm64-unsigned-beta.dmg)
 
 [Release、校验值及安装说明](https://github.com/SneyRio/Terminal-Workbench/releases/tag/v0.4.0-win-beta.16)
 
-Windows 0.4.0 已发布；macOS 0.4.0 已完成本机安装及 DMG 验收，但 GitHub 大文件上传超时，尚未公开发布，历史下载入口仍为 0.3.0。Windows x64 的 exe / ZIP 内测包见 [Releases](https://github.com/SneyRio/Terminal-Workbench/releases) 和 [安装说明](docs/windows-beta.md)。DMG 拖入 Applications；首次打开若因未验证开发者而拦截，可在系统设置的隐私与安全性中对该应用确认“仍要打开”，受管电脑可能禁止放行。包仅有完整临时签名，没有 Developer ID 和 Apple 公证。
+Windows 和 macOS 0.4.0 内测包均已公开发布并核对下载及校验值。Windows x64 的 exe / ZIP 内测包见 [Releases](https://github.com/SneyRio/Terminal-Workbench/releases) 和 [安装说明](docs/windows-beta.md)。DMG 拖入 Applications；首次打开若因未验证开发者而拦截，可在系统设置的隐私与安全性中对该应用确认“仍要打开”，受管电脑可能禁止放行。包仅有完整临时签名，没有 Developer ID 和 Apple 公证。
 
 用户需自行安装 Claude CLI，首次启动指南可检测或选择可执行文件，再添加账号与工作空间。详见 [安装、升级及本机恢复说明](docs/install-beta.md)。项目源码推送不代表 GitHub Release 已发布。
 

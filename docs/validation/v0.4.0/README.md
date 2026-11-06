@@ -14,4 +14,4 @@
 
 Windows CLI 生命周期使用编译后的 C# 替身，真实操作系统终端、剪贴板、加密和安装器均实际执行；不发送模型请求、不进行真实 OAuth。不能据此宣称已在每个 Windows 10/11 用户桌面或所有 HUD 插件中验收。macOS 文件删除专项用隔离目录模拟系统回收站，Windows 对可丢弃文件实际调用系统回收站。项目根目录和未保存内容受到删除保护，回收失败不会降级为永久删除。
 
-发布状态：Windows exe / ZIP 已在 `v0.4.0-win-beta.16` 公开，匿名下载返回 200，服务器 SHA-256 与验收清单一致。macOS 0.4.0 DMG 位于本机 release 目录；直连和 SOCKS 上传均被远端以 body inactivity timeout 中止，未作为已发布资产记录，README 不提供失效的新 DMG 链接。
+发布状态：Windows exe / ZIP 已在 `v0.4.0-win-beta.16` 公开，匿名下载返回 200，服务器 SHA-256 与验收清单一致。macOS 0.4.0 DMG 已重传并公开发布，匿名下载返回 200，服务器 SHA-256 和独立校验文件均与本地一致。此前直连与 SOCKS 上传被远端以 body inactivity timeout 中止；本次使用 HTTP/1.1 并禁用 Expect 等待成功。详见 [macOS 发布校验](mac-release.json)。

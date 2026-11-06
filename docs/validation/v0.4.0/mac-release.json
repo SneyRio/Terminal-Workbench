@@ -1,0 +1,12 @@
+{
+  "version": "0.4.0",
+  "file": "WbSpace-0.4.0-mac-arm64-unsigned-beta.dmg",
+  "anonymousDownload": 200,
+  "size": 151197163,
+  "sha256": "8299602b7821a714aba443ffd3e4cfbf3f7492694415fa436ec74df204c9bbbc",
+  "release": "https://github.com/SneyRio/Terminal-Workbench/releases/tag/v0.4.0-win-beta.16",
+  "signed": false,
+  "notarized": false,
+  "uploadTransport": "HTTP/1.1, Expect disabled",
+  "verifiedAt": "2026-11-06"
+}

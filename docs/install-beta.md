@@ -1,12 +1,14 @@
-# WbSpace 0.3.0 内测安装与升级
+# WbSpace 0.4.0 内测安装与升级
 
 当前包适用于 macOS Apple Silicon（M 系列），Electron 声明最低 macOS 13；本轮只在当前开发机验收，未在另一台真实 Mac 或 Intel Mac 验收。包具有完整临时签名，没有 Developer ID 发行身份，也没有 Apple 公证。适合知情的小范围内测，不能称为已通过 Gatekeeper 默认检查的正式发行版。
 
+Windows x64 安装见 [Windows 内测说明](windows-beta.md)。本文为 macOS 指南。
+
 ## 安装
 
-下载入口：[GitHub 内测 Release](https://github.com/SneyRio/Terminal-Workbench/releases/tag/v0.3.0-beta.1)，提供 DMG、对应 SHA-256 和独立安装说明。当前为预发布版，应用内正式版本检查不会将其作为稳定更新推送。
+下载入口：[GitHub 内测 Release](https://github.com/SneyRio/Terminal-Workbench/releases/tag/v0.4.0-win-beta.16)，提供 DMG、对应 SHA-256 和独立安装说明。当前为预发布版，应用内正式版本检查不会将其作为稳定更新推送。
 
-1. 获取 `WbSpace-0.3.0-mac-arm64-unsigned-beta.dmg`，可用同名 `.sha256` 文件核对哈希。
+1. 获取 `WbSpace-0.4.0-mac-arm64-unsigned-beta.dmg`，可用同名 `.sha256` 文件核对哈希。
 2. 打开 DMG，将“WbSpace.app”拖到 Applications。旧版需先等任务结束，再按 ⌘Q 退出后替换。
 3. 弹出磁盘映像，从“应用程序”打开。
 4. 如果出现未验证开发者/未公证拦截，先尝试打开一次，再到“系统设置 → 隐私与安全性 → 仍要打开”确认。公司受管设备可能不允许手动放行。不要关闭整机安全检查；若提示恶意软件或签名/文件损坏，应停止并检查来源及校验值。
