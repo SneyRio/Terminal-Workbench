@@ -59,3 +59,10 @@ final result: passed
 已核对 [筛选框焦点](docs/screenshots/connection-focus-fixed.png)：单个外框完整包裹图标和文字，内层 select 不再单独描边。[自定义供应商表单](docs/screenshots/custom-provider-form.png) 的字段、模型选择和主次操作清晰，密钥为密码输入，文本区已统一主题；去除重复页脚后，1024 高窗口完整显示表单。低高度窗口保留滚动。新增配置不把本地检查表述为真实推理成功。
 
 final result: passed
+
+
+## 0.3.0 WbSpace 首启与终端选区
+
+已检查 first-start-guide.png：缺少 CLI 的状态、三步导航、安装说明/选择入口、延后和下一步状态清晰。公共品牌更新为 WbSpace，保留原导航结构。终端选区深色浅紫底深字，浅色深蓝底白字；失焦仍有明确底色，边界完整覆盖括号和中文，原生剪贴板返回精确选择文本。截图使用隔离测试数据，未展示真实账号凭证。DMG 含安装说明与 Applications 链接，未公证状态在安装和设置处明确。
+
+final result: passed

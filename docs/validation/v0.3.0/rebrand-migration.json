@@ -1,0 +1,8 @@
+{
+  "passed": true,
+  "checks": [
+    "old installed app creates encrypted custom credential in isolated data",
+    "WbSpace reads the same identity and decrypts its key after rebrand without rewriting the encrypted bytes"
+  ],
+  "modelPrompts": 0
+}

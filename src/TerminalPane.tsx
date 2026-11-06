@@ -16,8 +16,8 @@ export function TerminalPane({ session, active, dark, fontSize, fontFamily='JetB
   const family=(name:string)=>name==='JetBrains Mono'?'"Accountor JetBrains Mono", "PingFang SC", "Microsoft YaHei", monospace':name==='system'?'"SFMono-Regular", Menlo, Monaco, Consolas, monospace':name+', monospace';
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState('');
-  const darkTheme = { background: '#00000000', foreground: '#e4e4ee', cursor: '#b1a5ff', selectionBackground: '#7771b655', black:'#30303c', red:'#ef8d91',green:'#a0d5ae',yellow:'#dfcf97',blue:'#a3b6ee',magenta:'#c9adea',cyan:'#91d3d7',white:'#eeedf5' };
-  const lightTheme = { background: '#00000000', foreground: '#30313d', cursor: '#6255ac', selectionBackground: '#8c82ce44', black:'#373843',red:'#ae424b',green:'#3c7958',yellow:'#8f6d21',blue:'#506dab',magenta:'#8753a7',cyan:'#2c7e86',white:'#ededf2' };
+  const darkTheme = { background: '#00000000', foreground: '#e4e4ee', cursor: '#b1a5ff', selectionBackground: '#b6a2ee', selectionForeground:'#15131f', selectionInactiveBackground:'#9383c2', black:'#30303c', red:'#ef8d91',green:'#a0d5ae',yellow:'#dfcf97',blue:'#a3b6ee',magenta:'#c9adea',cyan:'#91d3d7',white:'#eeedf5' };
+  const lightTheme = { background: '#00000000', foreground: '#30313d', cursor: '#6255ac', selectionBackground: '#36549a', selectionForeground:'#ffffff', selectionInactiveBackground:'#52658e', black:'#373843',red:'#ae424b',green:'#3c7958',yellow:'#8f6d21',blue:'#506dab',magenta:'#8753a7',cyan:'#2c7e86',white:'#ededf2' };
   useEffect(() => {
     if (!host.current) return;
     const term = new Terminal({ allowTransparency: true, cursorBlink: true, fontFamily: family(fontFamily), fontSize, lineHeight, scrollback: 10000, theme: dark ? darkTheme : lightTheme });

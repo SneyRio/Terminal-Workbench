@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "checks": [
+    "four real state connections fit the first viewport in the selected three-column design",
+    "subscription metrics show remaining percentages and custom models omit inapplicable quota bars",
+    "search, empty state and installed-tool filter work without exposing planned tools as connected",
+    "connection check reports progress and preserves independently sampled quota timestamp",
+    "overflow state, outside click, Escape and unavailable session switching are handled",
+    "card launch uses selected account and workspace without mutating the workspace default or existing sessions",
+    "card account switching enters the existing checkpoint review and can be canceled safely",
+    "details drawer supports real persisted rename and Escape dismissal",
+    "tool configuration and current custom-model service references are functional; future tools remain planned",
+    "add dialog recognizes existing references and creates independent configuration without opening a browser",
+    "minimum window layout, light theme and long identity values keep card actions accessible",
+    "removing an active account is blocked without interrupting its terminal or project"
+  ],
+  "errors": [],
+  "packaged": true
+}

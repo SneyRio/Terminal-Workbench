@@ -1,12 +1,18 @@
-# 终端工作站 · Terminal Workbench
+# WbSpace
 
 以本地工作空间和内置终端为中心的 macOS 桌面应用，管理 Agent CLI 的账号、会话、用量与项目文件。
 
-当前版本 **0.2.2** 接入 Claude Code，支持自动隔离的官方订阅账号，以及自定义供应商、密钥和模型配置。Codex CLI、Gemini CLI 等仍在接入规划中，界面不会将它们标为已连接。
+当前版本 **0.3.0（未公证内测）** 接入 Claude Code，支持自动隔离的官方订阅账号，以及自定义供应商、密钥和模型配置。Codex CLI、Gemini CLI 等仍在接入规划中，界面不会将它们标为已连接。
 
 ![账号与连接](docs/screenshots/account-cards-dark.png)
 
 截图使用隔离演示数据，额度不是用户实时余额。
+
+## 安装内测版
+
+当前提供 WbSpace macOS Apple Silicon DMG/ZIP。DMG 拖入 Applications；首次打开若因未验证开发者而拦截，可在系统设置的隐私与安全性中对该应用确认“仍要打开”，受管电脑可能禁止放行。包仅有完整临时签名，没有 Developer ID 和 Apple 公证。
+
+用户需自行安装 Claude CLI，首次启动指南可检测或选择可执行文件，再添加账号与工作空间。详见 [安装、升级及本机恢复说明](docs/install-beta.md)。项目源码推送不代表 GitHub Release 已发布。
 
 ## 主要功能
 
@@ -42,7 +48,7 @@ npm start
 npm run package:mac
 ```
 
-产物位于 `release/builds.noindex/终端工作站-darwin-arm64/终端工作站.app`。尚未提供 Apple Developer ID 签名和公证。
+产物位于 `release/builds.noindex/WbSpace-darwin-arm64/WbSpace.app`。尚未提供 Apple Developer ID 签名和公证。
 
 如果 Electron 尚未下载或原生终端模块需要重建：
 
@@ -80,10 +86,14 @@ npm test
 npm run test:e2e
 ```
 
-纯单元测试使用临时目录。桌面集成测试需要可运行的 macOS GUI；真实 CLI 恢复、已有账号检查等专项依赖本机配置的专用测试入口和测试会话，不是通用 CI 的前置条件。集成脚本可通过 `ACCOUNTOR_EXECUTABLE` 指向打包后的可执行文件，测试数据使用隔离目录。
+纯单元测试使用临时目录。桌面集成测试需要可运行的 macOS GUI；真实 CLI 恢复、已有账号检查等专项依赖本机配置的专用测试入口和测试会话，不是通用 CI 的前置条件。终端选区在深色、浅色和失焦时保持高对比，括号与中文拖选后可精确复制。
+
+集成脚本可通过 `ACCOUNTOR_EXECUTABLE` 指向打包后的可执行文件，测试数据使用隔离目录。
 
 - [新版 PRD 与选定方案](docs/prd/terminal-workbench-prd-v1.md)
 - [实现和测试记录](docs/implementation-report.md)
 - [视觉验收](design-qa.md)
+
+新版本启动前会生成本机配置与加密密钥快照，保留最近五份；设置中可备份、查看备份和手动检查 GitHub Release。重复启动激活已有实例。当前更新需手动替换，不后台安装。
 
 项目不会提交本机账号状态、凭证、测试数据、`node_modules` 或安装包。字体原始文件和 SIL OFL 1.1 许可证随源码及应用分发，见 [字体来源与许可](public/licenses/jetbrains-mono/source.json)。

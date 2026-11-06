@@ -18,11 +18,17 @@ const {configuredStatusLine}=require('./statusline.cjs');
 const {DraftBatch,TerminalHistory,appendTerminal,flushTerminal}=require('./performance.cjs');
 const { Store, atomicJson, id, inside, cleanEnv, buildHandoff } = require('./core.cjs');
 const exec = promisify(execFile);
+const profileDiscovery=require('./profile-discovery.cjs');
+const {backupBeforeUpgrade}=require('./release-support.cjs');
+const updates=require('./updates.cjs');
 const {Connections,connection}=require('./account-connections.cjs');
 const root = path.resolve(__dirname, '..');
+// Keep the established safeStorage/Keychain namespace across the public rebrand.
 app.setName('终端工作站');
+app.setAboutPanelOptions({applicationName:'WbSpace'});
 const legacyDataRoot=path.join(app.getPath('appData'),'Claude Accountor');
-const dataRoot = process.env.ACCOUNTOR_DATA_DIR || (app.isPackaged ? (existsSync(path.join(legacyDataRoot,'state.json'))?legacyDataRoot:path.join(app.getPath('appData'),'Terminal Workbench')) : path.join(root, '.local-app-data'));
+const workbenchDataRoot=path.join(app.getPath('appData'),'Terminal Workbench');
+const dataRoot = process.env.ACCOUNTOR_DATA_DIR || (app.isPackaged ? (existsSync(path.join(legacyDataRoot,'state.json'))?legacyDataRoot:existsSync(path.join(workbenchDataRoot,'state.json'))?workbenchDataRoot:path.join(app.getPath('appData'),'WbSpace')) : path.join(root, '.local-app-data'));
 app.setPath('userData', dataRoot);
 const store = new Store(dataRoot);
 const connections=new Connections(dataRoot,safeStorage);
@@ -31,14 +37,8 @@ let win, quitting = false;
 const notify = (channel, payload) => { if (win && !win.isDestroyed()) win.webContents.send(channel, payload); };
 const pushState = () => notify('state:changed', store.state);
 const draftWrites=new DraftBatch(store,pushState);
-const existingProfiles = {
-  'claude-jemusbob': { provider:'subscription', configDirectory:path.join(os.homedir(),'.claude') },
-  'claude-tomton': { provider:'subscription', configDirectory:path.join(os.homedir(),'.claude-tomton') },
-  'claude-dp': { provider:'custom', configDirectory:path.join(os.homedir(),'.claude-dp') },
-  'claude-zmn': { provider:'custom', configDirectory:path.join(os.homedir(),'.claude-zmn') }
-};
-const accountDir = accountId => { const a=store.state.accounts.find(a=>a.id===accountId);return a?.source==='existing' ? existingProfiles[a.command].configDirectory : path.join(dataRoot,'accounts',accountId); };
-const accountExecutable = async account => account.source==='existing' ? path.join(os.homedir(),'.local/bin',account.command) : executable();
+const accountDir = accountId => { const a=store.state.accounts.find(a=>a.id===accountId);return a?.source==='existing' ? profileDiscovery.existingDirectory(a) : path.join(dataRoot,'accounts',accountId); };
+const accountExecutable = async account => account.source==='existing'&&account.command ? (path.isAbsolute(account.command)?account.command:path.join(os.homedir(),'.local/bin',account.command)) : executable();
 const telemetryDir = path.join(dataRoot, 'telemetry');
 const argvString = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
 function cliEnv(configDirectory) {
@@ -150,7 +150,7 @@ async function startSession(input) {
       for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd']) settings.hooks[event] = [{ hooks: [{ type: 'command', command: telemetry + ' event' }] }];
       const originalStatusLine=await configuredStatusLine(accountDir(acct.id));
       settings.statusLine = {...(originalStatusLine||{}),type:'command',command:telemetry+' usage'+(originalStatusLine?' --delegate '+argvString(originalStatusLine.command):'')};
-      args = ['--settings', JSON.stringify(settings)];
+      args = ['--no-chrome','--settings', JSON.stringify(settings)];
       if(acct.connection)args.push('--model',acct.connection.defaultModel);
       const extra = [];
       for (const project of projects.slice(1)) {
@@ -368,11 +368,23 @@ function registerHandlers() {
   register('account:status', statusAccount);
   register('account:rename',async(accountId,name)=>{store.account(accountId);if(!name?.trim())throw new Error('账号别名不能为空');await store.update(s=>{s.accounts.find(a=>a.id===accountId).name=name.trim().slice(0,80);});pushState();});
   register('terminal:rename',async(sid,title)=>{if(!title?.trim())throw new Error('会话名称不能为空');await store.update(s=>{const r=s.sessions.find(s=>s.id===sid);if(!r)throw new Error('会话不存在');r.title=title.trim().slice(0,100);r.titleSource='manual';});pushState();});
-  register('account:import', async command => {
-    if(!existingProfiles[command])throw new Error('不支持的现有启动入口');
-    if(!existsSync(path.join(os.homedir(),'.local/bin',command)))throw new Error('启动入口不存在');
-    const old=store.state.accounts.find(a=>a.command===command);if(old)return old;
-    const a={agentToolId:'claude-code',id:id(),name:command,email:'',source:'existing',command,provider:existingProfiles[command].provider,status:'unknown',createdAt:Date.now(),usage:null};
+  register('account:discover',()=>profileDiscovery.discover());
+  register('account:pick-profile',async()=>{
+    const choice=await dialog.showOpenDialog(win,{title:'选择 Claude CLI 配置目录',properties:['openDirectory','showHiddenFiles']});
+    return choice.canceled?null:profileDiscovery.profile(choice.filePaths[0]);
+  });
+  register('account:import', async input => {
+    let spec;
+    if(typeof input==='string'){
+      // Compatibility for older UI clients; no shell content is evaluated.
+      const configDirectory=profileDiscovery.existingDirectory({command:input});
+      spec={...await profileDiscovery.profile(configDirectory),command:input,provider:['claude-dp','claude-zmn'].includes(input)?'custom':'subscription'};
+    }else{
+      const picked=await profileDiscovery.profile(input?.configDirectory);
+      spec={...picked,provider:['subscription','custom'].includes(input.provider)?input.provider:picked.provider};
+    }
+    const old=store.state.accounts.find(a=>a.source==='existing'&&profileDiscovery.existingDirectory(a)===spec.configDirectory);if(old)return old;
+    const a={agentToolId:'claude-code',id:id(),name:spec.command||spec.name,email:'',source:'existing',command:spec.command||'',configDirectory:spec.configDirectory,provider:spec.provider,status:'unknown',createdAt:Date.now(),usage:null};
     await store.update(s=>s.accounts.push(a));pushState();return a;
   });
   register('account:login', accountId => startSession({ kind: 'login', accountId }));
@@ -557,7 +569,12 @@ function registerHandlers() {
     await store.update(s=>s.settings.background=file); pushState();
   });
   register('settings:background-data', async () => { const file=store.state.settings.background; if(!file)return ''; try { const ext=path.extname(file); return `data:image/${['.jpg','.jpeg'].includes(ext)?'jpeg':ext.slice(1)};base64,${(await fs.readFile(file)).toString('base64')}`; } catch { return ''; } });
-  register('system:info', async () => ({ version:app.getVersion(),tools:agentTools,plannedTools,platform:process.platform, claude:await executable().catch(()=>''), dataRoot, profiles:Object.entries(existingProfiles).filter(([name])=>existsSync(path.join(os.homedir(),'.local/bin',name))).map(([command,info])=>({command,provider:info.provider})) }));
+  register('system:info', async () => ({version:app.getVersion(),tools:agentTools,plannedTools,platform:process.platform,arch:process.arch,claude:await executable().catch(()=>''),dataRoot,profiles:await profileDiscovery.discover(),releaseChannel:require('../package.json').releaseChannel||'unsigned-beta'}));
+  register('setup:cli',async()=>{const pick=await dialog.showOpenDialog(win,{title:'选择 Claude CLI 可执行文件',properties:['openFile','showHiddenFiles']});if(pick.canceled)return null;const file=await fs.realpath(pick.filePaths[0]);await fs.access(file,1);if(!(await fs.stat(file)).isFile())throw new Error('请选择可执行文件');await store.update(s=>{s.settings.claudePath=file;});pushState();return file;});
+  register('setup:finish',async()=>{await store.update(s=>{s.onboarding={completedAt:Date.now()};});pushState();});
+  register('updates:check',()=>updates.check(app.getVersion()));
+  register('data:backup',async()=>{await draftWrites.flush();await store.queue;const dir=await backupBeforeUpgrade(dataRoot,'manual-'+Date.now());return dir;});
+  register('data:show-backups',async()=>{const dir=path.join(dataRoot,'backups.noindex');await fs.mkdir(dir,{recursive:true,mode:0o700});const error=await shell.openPath(dir);if(error)throw new Error('无法打开备份目录，请通过 Finder 访问应用数据目录');});
   register('external:open', url => { const parsed=new URL(url); if(!['https:','http:'].includes(parsed.protocol))throw new Error('不支持的链接'); return shell.openExternal(parsed.href); });
 }
 
@@ -585,7 +602,7 @@ async function pollTelemetry(sessionIds) {
 }
 
 async function createWindow() {
-  win=new BrowserWindow({width:1480,height:980,minWidth:960,minHeight:640,title:'终端工作站',icon:path.join(root,'dist/app-icon-v1.png'),backgroundColor:'#f4f4f7',titleBarStyle:'hiddenInset',webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
+  win=new BrowserWindow({width:1480,height:980,minWidth:960,minHeight:640,title:'WbSpace',icon:path.join(root,'dist/app-icon-v1.png'),backgroundColor:'#f4f4f7',titleBarStyle:'hiddenInset',webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
   win.webContents.setWindowOpenHandler(({url})=> { if(/^https?:/.test(url))shell.openExternal(url); return {action:'deny'}; });
   win.webContents.on('will-navigate',(event,url)=> { const expected=process.env.ACCOUNTOR_DEV_URL; if(expected?new URL(url).origin!==new URL(expected).origin:new URL(url).href.split(/[?#]/)[0]!==pathToFileURL(path.join(root,'dist/index.html')).href)event.preventDefault(); });
   win.on('close',e=> { if(!quitting){e.preventDefault(); win.hide();} });
@@ -593,14 +610,20 @@ async function createWindow() {
   if(process.env.ACCOUNTOR_SCREENSHOT) setTimeout(()=>win.capturePage().then(im=>fs.writeFile(process.env.ACCOUNTOR_SCREENSHOT,im.toPNG())),1200);
 }
 
+const ownsInstance=app.requestSingleInstanceLock();
+if(!ownsInstance)app.exit(0);
+app.on('second-instance',()=>{if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
+
 app.whenReady().then(async()=> {
   try {
-    if(app.isPackaged&&!process.env.ACCOUNTOR_DATA_DIR&&existsSync('/Applications/Claude Accountor.app')){
-      const old=await inspectLegacy('/Applications/Claude Accountor.app');
-      if(old.mainRunning){dialog.showErrorBox('请先退出旧应用','Claude Accountor 仍在运行。请先按 ⌘Q 退出旧应用，再打开终端工作站，现有数据会自动保留。');quitting=true;app.quit();return;}
-      await retireLegacy('/Applications/Claude Accountor.app',path.join(dataRoot,'legacy-builds.noindex','Claude Accountor-before-'+Date.now()+'.app')).catch(()=>{});
+    if(app.isPackaged&&!process.env.ACCOUNTOR_DATA_DIR)for(const legacy of ['/Applications/Claude Accountor.app','/Applications/终端工作站.app']){
+      if(!existsSync(legacy))continue;const old=await inspectLegacy(legacy);
+      if(old.mainRunning){dialog.showErrorBox('请先退出旧应用',path.basename(legacy,'.app')+' 仍在运行。请先按 ⌘Q 退出旧应用，再打开 WbSpace，现有数据会自动保留。');quitting=true;app.quit();return;}
+      await retireLegacy(legacy,path.join(dataRoot,'legacy-builds.noindex',path.basename(legacy,'.app')+'-before-'+Date.now()+'.app')).catch(()=>{});
     }
+    await backupBeforeUpgrade(dataRoot,app.getVersion());
     await store.load();
+    await store.update(s=>{for(const a of s.accounts)if(a.source==='existing'&&!a.configDirectory){try{a.configDirectory=profileDiscovery.existingDirectory(a);}catch{}}s.installVersion=app.getVersion();if(!s.onboarding&&(s.accounts.length||s.workspaces.length))s.onboarding={completedAt:Date.now(),migrated:true};});
     await store.update(s=>{
       // A crash before the replacement transaction must leave one recoverable source.
       const abandoned=new Set(s.sessions.filter(r=>r.pendingRestore&&r.backend==='embedded'&&(s.sessions.some(old=>old.id===r.pendingRestore)||findDeleted(s,r.pendingRestore))).map(r=>r.id));
@@ -621,7 +644,7 @@ app.whenReady().then(async()=> {
     await refreshTitles();
     registerHandlers();
     setInterval(()=>{void expireDeleted().catch(()=>{});},60000).unref();
-    Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'终端工作站',submenu:[{role:'about'},{type:'separator'},{label:'退出终端工作站',accelerator:'CmdOrCtrl+Q',click:()=>app.quit()}]},{label:'编辑',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{label:'复制',accelerator:'CmdOrCtrl+C',click:()=>notify('clipboard:copy-request')},{role:'paste'},{role:'selectAll'}]},{role:'viewMenu'},{role:'windowMenu'}]));
+    Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'WbSpace',submenu:[{role:'about'},{type:'separator'},{label:'退出 WbSpace',accelerator:'CmdOrCtrl+Q',click:()=>app.quit()}]},{label:'编辑',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{label:'复制',accelerator:'CmdOrCtrl+C',click:()=>notify('clipboard:copy-request')},{role:'paste'},{role:'selectAll'}]},{role:'viewMenu'},{role:'windowMenu'}]));
     await createWindow();
     let polling=false;
     setInterval(async()=>{if(polling)return;polling=true;try{await pollTelemetry();}finally{polling=false;}},2000).unref();
@@ -636,7 +659,7 @@ app.on('before-quit',async e=> {
   try{await new Promise(resolve=>setImmediate(resolve));await draftWrites.flush();await store.queue;}catch(error){checkingQuit=false;dialog.showErrorBox('草稿未保存',error.message);return;}
   const active=store.state.sessions.some(s=>terminals.has(s.id)&&['running','busy','idle','starting'].includes(s.status));
   const drafts=Object.values(store.state.drafts).some(d=>d.text!==d.baseText);
-  if(active||drafts){ const choice=dialog.showMessageBoxSync(win,{type:'question',message:'退出终端工作站？',detail:(active?'内置终端将被结束。\n':'')+(drafts?'未保存内容将保留为本地恢复草稿，不会写入原文件。':''),buttons:['取消','退出并保留草稿'],defaultId:0,cancelId:0}); if(choice!==1){checkingQuit=false;return;} }
+  if(active||drafts){ const choice=dialog.showMessageBoxSync(win,{type:'question',message:'退出 WbSpace？',detail:(active?'内置终端将被结束。\n':'')+(drafts?'未保存内容将保留为本地恢复草稿，不会写入原文件。':''),buttons:['取消','退出并保留草稿'],defaultId:0,cancelId:0}); if(choice!==1){checkingQuit=false;return;} }
   try{await draftWrites.flush();}catch(error){checkingQuit=false;dialog.showErrorBox('草稿未保存',error.message);return;}
   quitting=true;
   for(const t of terminals.values())if(!t.closed)try{t.proc.kill();}catch{}

@@ -4,7 +4,7 @@ const {execFile}=require('node:child_process');
 const {promisify}=require('node:util');
 function legacyActivity(output,legacyPath){
   const commands=output.split('\n').map(line=>line.trim().replace(/^\d+\s+/,''));
-  const prefix=legacyPath+'/Contents/MacOS/Claude Accountor';
+  const prefix=legacyPath+'/Contents/MacOS/'+path.basename(legacyPath,'.app');
   return {inUse:commands.some(cmd=>cmd.includes(legacyPath+'/')),mainRunning:commands.some(cmd=>cmd.startsWith(prefix)&&!cmd.includes('--type=')&&!cmd.includes('.cjs')&&!cmd.includes('--settings'))};
 }
 async function inspectLegacy(legacyPath){

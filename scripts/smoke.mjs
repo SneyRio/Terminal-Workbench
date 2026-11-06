@@ -14,7 +14,7 @@ const errors=[];const checks=[];
 const app=await electron.launch({...(process.env.ACCOUNTOR_EXECUTABLE?{executablePath:process.env.ACCOUNTOR_EXECUTABLE,args:[]}:{args:[root]}),env:{...process.env,ACCOUNTOR_DATA_DIR:path.join(testRoot,'data'),ELECTRON_ENABLE_LOGGING:'1'}});
 let page;
 try{
-  page=await app.firstWindow();page.on('pageerror',e=>errors.push(e.message));
+  page=await app.firstWindow();await page.waitForFunction(()=>!!window.accountor);await page.evaluate(()=>window.accountor.invoke('setup:finish'));page.on('pageerror',e=>errors.push(e.message));
   await page.setViewportSize({width:1440,height:1024});
   await expect(page.getByRole('heading',{name:'你的工作空间'})).toBeVisible();checks.push('native preload and empty start');
   await app.evaluate(async({dialog},paths)=>{dialog.showOpenDialog=async()=>({canceled:false,filePaths:paths});},[project,extra]);
@@ -52,7 +52,7 @@ try{
   await page.getByLabel('不透明度数值').fill('50');await page.getByLabel('不透明度数值').press('Tab');
   await page.getByRole('button',{name:'浅灰',exact:true}).click();await expect(page.locator('html')).toHaveAttribute('data-theme','light');checks.push('theme switching and opacity settings');
   await page.getByRole('button',{name:'账号与连接',exact:false}).click();
-  await page.locator('.connections-toolbar').getByRole('button',{name:'添加连接',exact:true}).click();await expect(page.getByRole('button',{name:'本机现有入口',exact:true})).toBeVisible();await expect(page.locator('.profile-buttons button')).toHaveCount(4);await page.getByRole('button',{name:'取消',exact:true}).click();checks.push('existing CLI profile discovery');
+  await page.locator('.connections-toolbar').getByRole('button',{name:'添加连接',exact:true}).click();await expect(page.getByRole('button',{name:'本机现有入口',exact:true})).toBeVisible();await expect(page.getByRole('button',{name:'选择其他配置目录',exact:true})).toBeVisible();await expect(page.getByLabel('导入配置类型')).toBeVisible();await page.getByRole('button',{name:'取消',exact:true}).click();checks.push('existing CLI profile discovery');
   await page.locator('.workspace-nav').filter({hasText:'账号工具研发'}).click();
   await expect(page.getByText('磁盘文件已变化',{exact:true})).toBeVisible();checks.push('navigation preserves unsaved file tabs');
   await page.screenshot({path:path.join(reports,'workspace-light.png')});

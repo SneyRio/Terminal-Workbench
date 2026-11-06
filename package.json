@@ -1,6 +1,6 @@
 {
-  "name": "terminal-workbench",
-  "version": "0.2.2",
+  "name": "wbspace",
+  "version": "0.3.0",
   "private": true,
   "description": "Local workspaces for agent CLIs",
   "main": "electron/main.cjs",
@@ -14,7 +14,8 @@
     "rebuild:native": "electron-rebuild -f -w node-pty",
     "postinstall": "node node_modules/electron/install.js && electron-rebuild -f -w node-pty",
     "package:mac": "npm run build:icon && npm run build && node scripts/package.mjs",
-    "build:icon": "node scripts/build-icon.mjs"
+    "build:icon": "node scripts/build-icon.mjs",
+    "release:mac": "npm run build && node scripts/package.mjs && node scripts/release-mac.mjs"
   },
   "dependencies": {
     "@codemirror/lang-javascript": "^6.2.4",

@@ -15,7 +15,7 @@ else {const value=fs.readFileSync(mode,'utf8');setTimeout(()=>{if(value==='error
 const launch=()=>electron.launch({...(process.env.ACCOUNTOR_EXECUTABLE?{executablePath:process.env.ACCOUNTOR_EXECUTABLE,args:[]}:{args:[root]}),env:{...process.env,PATH:'/usr/bin:/bin:/usr/sbin:/sbin',ACCOUNTOR_DATA_DIR:path.join(testRoot,'data')}});
 const checks=[];let app=await launch();
 try{
- const page=await app.firstWindow();await page.waitForFunction(()=>!!window.accountor);
+ const page=await app.firstWindow();await page.waitForFunction(()=>!!window.accountor);await page.evaluate(()=>window.accountor.invoke('setup:finish'));
  await page.evaluate(file=>window.accountor.invoke('settings:save',{claudePath:file}),fixture);
  const account=await page.evaluate(()=>window.accountor.invoke('account:add','登录回归'));
  await page.getByRole('button',{name:/账号与连接/}).click();

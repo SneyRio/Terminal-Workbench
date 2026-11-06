@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "checks": [
+    "workspace and archived migration use embedded terminal and remove external terminal settings",
+    "existing deleted sessions get distinct task titles from local checkpoints and manual names stay intact",
+    "permanent deletion supports cancel",
+    "failed persistence does not remove trash or its recovery checkpoint",
+    "confirmed permanent deletion removes the recovery record and exclusively owned checkpoint",
+    "shared checkpoints survive until their last reference is permanently removed",
+    "legacy external backend parameters still create a real embedded PTY",
+    "new brand is visible without moving the isolated state directory",
+    "titles persist and permanent deletion cannot reappear after restart"
+  ],
+  "packaged": true
+}

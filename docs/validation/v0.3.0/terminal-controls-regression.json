@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "packaged": true,
+  "checks": [
+    "mouse-selected terminal text copies via actual Command-C and native clipboard",
+    "parentheses and Chinese text copy exactly while opaque active and inactive selections remain visible in dark and light themes",
+    "Ctrl-C without selection still reaches the running CLI",
+    "Command-C in normal input still uses native DOM copy",
+    "header font control and font/family/line-height settings resize existing PTY without restart",
+    "native scrollback wheel and draggable scrollbar both navigate long terminal output",
+    "CLI OSC52 clipboard output supports UTF-8 without exposing clipboard reads",
+    "Cmd-C in alternate screen routes CLI copy action through OSC52",
+    "file quick-open delegates original typed path to native system association"
+  ],
+  "errors": []
+}

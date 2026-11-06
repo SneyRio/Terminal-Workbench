@@ -1,0 +1,19 @@
+import {useState} from 'react';
+import {call} from './api';
+import type {AppState} from './types';
+export function SetupGuide({state,info,onClose,onNavigate,onInfo,onError}:{state:AppState;info:any;onClose:()=>void;onNavigate:(where:'accounts'|'workspace')=>void;onInfo:(info:any)=>void;onError:(e:unknown)=>void}){
+ const [step,setStep]=useState(info?.claude?(state.accounts.length?2:1):0),[busy,setBusy]=useState(false);
+ const pick=async()=>{setBusy(true);try{await call('setup:cli');onInfo(await call('system:info'));}catch(e){onError(e);}finally{setBusy(false);}};
+ const finish=async()=>{try{await call('setup:finish');onClose();}catch(e){onError(e);}};
+ return <div className="modal-backdrop"><section className="modal setup-guide" role="dialog" aria-modal="true" aria-label="首次启动指南"><h2>欢迎使用WbSpace</h2><p className="muted">先连接本机 CLI，再添加账号和工作空间。</p><div className="setup-steps">{['检查 CLI','添加账号','创建工作空间'].map((s,i)=><button key={s} className={step===i?'selected':''} aria-current={step===i?'step':undefined} onClick={()=>setStep(i)}>{i+1}. {s}</button>)}</div>
+ {step===0&&<><h3>Claude CLI</h3><p className="connection-url">{info?.claude||'尚未找到可用的 Claude CLI'}</p><p>应用包含终端运行环境。Claude CLI 需要单独安装，账号认证和模型调用由 CLI 完成。</p><div className="setup-actions"><button className="secondary" disabled={busy} onClick={()=>void pick()}>选择 CLI 可执行文件</button><button className="text-button" onClick={()=>void call('external:open','https://code.claude.com/docs/en/setup').catch(onError)}>查看官方安装说明</button><button className="text-button" onClick={()=>void call('system:info').then(onInfo).catch(onError)}>重新检测</button></div></>}
+ {step===1&&<><h3>添加自己的账号</h3><p>官方订阅使用独立目录登录；自定义供应商填写兼容地址、密钥和模型。也可以导入已有 Claude 配置。</p><p>已添加 {state.accounts.length} 个连接。网页登录只使用系统默认浏览器。</p><button className="primary" onClick={()=>onNavigate('accounts')}>前往添加账号</button></>}
+ {step===2&&<><h3>把本地项目加入工作空间</h3><p>第一个项目是 CLI 启动目录，其他项目作为附加目录。项目只建立引用，原文件保留在本地。</p><p>已有 {state.workspaces.length} 个工作空间。可以在设置中重新打开本指南。</p><button className="primary" onClick={()=>onNavigate('workspace')}>创建工作空间</button></>}
+ <footer className="modal-footer"><button className="secondary" onClick={()=>void finish()}>稍后设置</button><span className="spacer"/>{step>0&&<button className="secondary" onClick={()=>setStep(step-1)}>上一步</button>}{step<2?<button className="primary" disabled={step===0&&!info?.claude} onClick={()=>setStep(step+1)}>下一步</button>:<button className="primary" onClick={()=>void finish()}>完成向导</button>}</footer></section></div>;
+}
+export function ReleaseSettings({onGuide,onError,channel}:{channel?:string;onGuide:()=>void;onError:(e:unknown)=>void}){
+ const [result,setResult]=useState<any>(null),[busy,setBusy]=useState(false),[backup,setBackup]=useState('');
+ const check=async()=>{setBusy(true);try{setResult(await call('updates:check'));}catch(e){setResult({message:e instanceof Error?e.message:String(e)});}finally{setBusy(false);}};
+ const save=async()=>{setBusy(true);try{const p=await call<string>('data:backup');setBackup(p);}catch(e){onError(e);}finally{setBusy(false);}};
+ return <section className="release-settings"><h3>安装与数据</h3><p className="muted">{channel==='notarized'?'已公证版本':channel==='signed'?'已签名 · 未公证版本':'未公证内测版'} · macOS Apple Silicon。更新需下载后手动替换，应用不会后台安装或中断会话。</p><div className="setup-actions"><button className="secondary" onClick={onGuide}>首次启动指南</button><button className="secondary" disabled={busy} onClick={()=>void check()}>{busy?'处理中…':'检查更新'}</button><button className="secondary" disabled={busy} onClick={()=>void save()}>立即备份配置</button><button className="text-button" onClick={()=>void call('data:show-backups').catch(onError)}>查看本机备份</button></div>{result&&<p role="status">{result.message}{result.status==='available'&&<button className="text-button" onClick={()=>void call('external:open',result.url).catch(onError)}>打开版本下载页</button>}</p>}{backup&&<p role="status" className="connection-url">已备份：{backup}。备份保留在本机，恢复需先退出应用；加密密钥依赖本机钥匙串。</p>}</section>;
+}

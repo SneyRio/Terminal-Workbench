@@ -1,0 +1,21 @@
+{
+  "version": "0.3.0",
+  "brand": "WbSpace",
+  "unitPassed": 38,
+  "integrationChecks": 97,
+  "checksBySuite": {
+    "release-readiness-regression": 8,
+    "account-cards-regression": 12,
+    "account-login-regression": 8,
+    "connection-provisioning-regression": 8,
+    "session-trash-regression": 13,
+    "navigation-regression": 6,
+    "quota-footer-regression": 6,
+    "smoke": 13,
+    "terminal-controls-regression": 9,
+    "native-resume-trash": 3,
+    "rebrand-migration": 2,
+    "titles-purge-regression": 9
+  },
+  "scope": "Checks passed across same-version build iterations. Final rebrand, selection and no-Chrome changes rechecked in setup (8), titles (9), terminal (9), native CLI (3), credential migration (2). No model prompts, no real new OAuth. No second physical Mac or notarization/Developer ID validation."
+}
