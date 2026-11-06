@@ -31,13 +31,15 @@ jobs:
         if: steps.pty-cache.outputs.cache-hit != 'true'
         with:
           path: node_modules/node-pty/build
-          key: ${{ steps.pty-cache.outputs.cache-primary-key }}
+          key: windows-2022-x64-electron-45.2.2-nodepty-1.1.0-${{ hashFiles('package-lock.json') }}
       - run: node --test tests/file-trash.test.cjs tests/platform.test.cjs tests/release-readiness.test.cjs tests/performance.test.cjs tests/session-history.test.cjs tests/session-titles.test.cjs
       - run: npm run package:win
       - run: ./scripts/build-windows-fixture.ps1
       - run: npm run test:windows
+        timeout-minutes: 5
       - run: node scripts/release-windows.mjs
       - run: node scripts/windows-installer-smoke.mjs
+        timeout-minutes: 5
       - uses: actions/upload-artifact@v4
         if: always()
         with:
