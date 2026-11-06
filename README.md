@@ -1,8 +1,8 @@
 # WbSpace
 
-以本地工作空间和内置终端为中心的 macOS 桌面应用，管理 Agent CLI 的账号、会话、用量与项目文件。
+以本地工作空间和内置终端为中心的 macOS / Windows 桌面应用，管理 Agent CLI 的账号、会话、用量与项目文件。
 
-当前版本 **0.3.0（未公证内测）** 接入 Claude Code，支持自动隔离的官方订阅账号，以及自定义供应商、密钥和模型配置。Codex CLI、Gemini CLI 等仍在接入规划中，界面不会将它们标为已连接。
+当前版本 **0.4.1（未公证/未发行者签名内测）** 接入 Claude Code，支持自动隔离的官方订阅账号，以及自定义供应商、密钥和模型配置。Codex CLI、Gemini CLI 等仍在接入规划中，界面不会将它们标为已连接。
 
 ![账号与连接](docs/screenshots/account-cards-dark.png)
 
@@ -10,13 +10,13 @@
 
 ## 安装内测版
 
-[Windows x64 安装版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v0.4.0-win-beta.16/WbSpace-0.4.0-windows-x64-setup.exe) · [Windows x64 ZIP 解压版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v0.4.0-win-beta.16/WbSpace-0.4.0-windows-x64-portable.zip) · [macOS Apple Silicon DMG](https://github.com/SneyRio/Terminal-Workbench/releases/download/v0.4.0-win-beta.16/WbSpace-0.4.0-mac-arm64-unsigned-beta.dmg)
+[Windows x64 安装版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v0.4.1-beta.18/WbSpace-0.4.1-windows-x64-setup.exe) · [Windows x64 ZIP 解压版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v0.4.1-beta.18/WbSpace-0.4.1-windows-x64-portable.zip) · [macOS Apple Silicon DMG](https://github.com/SneyRio/Terminal-Workbench/releases/download/v0.4.1-beta.18/WbSpace-0.4.1-mac-arm64-unsigned-beta.dmg)
 
-[Release、校验值及安装说明](https://github.com/SneyRio/Terminal-Workbench/releases/tag/v0.4.0-win-beta.16)
+[Release、校验值及安装说明](https://github.com/SneyRio/Terminal-Workbench/releases/tag/v0.4.1-beta.18)
 
-Windows 和 macOS 0.4.0 内测包均已公开发布并核对下载及校验值。Windows x64 的 exe / ZIP 内测包见 [Releases](https://github.com/SneyRio/Terminal-Workbench/releases) 和 [安装说明](docs/windows-beta.md)。DMG 拖入 Applications；首次打开若因未验证开发者而拦截，可在系统设置的隐私与安全性中对该应用确认“仍要打开”，受管电脑可能禁止放行。包仅有完整临时签名，没有 Developer ID 和 Apple 公证。
+Windows 和 macOS 0.4.1 内测包均已公开发布并核对下载及校验值。Windows x64 的 exe / ZIP 内测包见 [Releases](https://github.com/SneyRio/Terminal-Workbench/releases) 和 [安装说明](docs/windows-beta.md)。DMG 拖入 Applications；首次打开若因未验证开发者而拦截，可在系统设置的隐私与安全性中对该应用确认“仍要打开”，受管电脑可能禁止放行。包仅有完整临时签名，没有 Developer ID 和 Apple 公证。
 
-用户需自行安装 Claude CLI，首次启动指南可检测或选择可执行文件，再添加账号与工作空间。详见 [安装、升级及本机恢复说明](docs/install-beta.md)。项目源码推送不代表 GitHub Release 已发布。
+用户需自行安装 Claude CLI；应用自动检测，无需填写程序路径。Windows 支持原生安装、npm 原生依赖、WinGet、Scoop 等常见位置，并校验程序可运行；旧 npm 脚本失效时自动寻找其他安装。确实缺失时提供安装指引，安装后重新检测即可。再添加账号与工作空间。详见 [安装、升级及本机恢复说明](docs/install-beta.md)。项目源码推送不代表 GitHub Release 已发布。
 
 ## 主要功能
 

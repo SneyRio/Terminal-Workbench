@@ -1,14 +1,14 @@
 # Windows x64 内测
 
-目标系统：Windows 10 22H2、Windows 11 x64。Windows Server 2022 x64 原生构建、25 项单元检查、14 项桌面流程及 4 项安装生命周期检查已通过。[验收运行](https://github.com/SneyRio/Terminal-Workbench/actions/runs/42179651138)。安装包发布见 [0.4.0 内测 Release](https://github.com/SneyRio/Terminal-Workbench/releases/tag/v0.4.0-win-beta.16)；个人 Windows 10/11 桌面和真实 OAuth 仍需用户环境验收。
+目标系统：Windows 10 22H2、Windows 11 x64。Windows Server 2022 x64 原生构建、31 项单元检查、17 项桌面流程及 4 项安装生命周期检查已通过。[验收运行](https://github.com/SneyRio/Terminal-Workbench/actions/runs/42193825522)。安装包发布见 [0.4.1 内测 Release](https://github.com/SneyRio/Terminal-Workbench/releases/tag/v0.4.1-beta.18)；个人 Windows 10/11 桌面和真实 OAuth 仍需用户环境验收。
 
 ## 安装与使用
 
-验收通过后提供当前用户安装包 `WbSpace-0.4.0-windows-x64-setup.exe` 和可解压版本 `WbSpace-0.4.0-windows-x64-portable.zip`。可解压版仍在当前用户应用数据目录保存状态，不代表随 U 盘携带密钥。卸载默认保留用户数据。
+验收通过后提供当前用户安装包 `WbSpace-0.4.1-windows-x64-setup.exe` 和可解压版本 `WbSpace-0.4.1-windows-x64-portable.zip`。可解压版仍在当前用户应用数据目录保存状态，不代表随 U 盘携带密钥。卸载默认保留用户数据。
 
 本期未配置 Authenticode 证书。安装程序可能显示未知发布者，企业策略也可能禁止运行。仅使用本仓库 Release 的产物并核对 SHA256SUMS.txt。
 
-先自行安装原生 Claude Code，选择 `%USERPROFILE%\.local\bin\claude.exe`，建议 CLI 不低于 2.1.318。暂不支持选择 npm `.cmd/.bat` shim 或 WSL 内部可执行文件。官方 OAuth 交由 Windows 的系统默认 URL 关联打开，不指定 Edge、Chrome 或内置浏览器。
+先自行安装 Claude Code，建议 CLI 不低于 2.1.318。应用自动扫描 PATH、注册表、原生安装、npm 原生依赖、WinGet、Scoop 等常见位置，运行校验通过后自动使用，无需知道安装路径。旧 npm `.ps1/.cmd` 脚本失效时会跳过；只有失效脚本且实际程序缺失时会明确提示修复安装。安装或修复后在设置的“检测与安装”中点击“重新检测”，再新建内置终端。手动路径仅放在高级选项。暂不支持直接运行 WSL 内部程序。官方 OAuth 交由 Windows 的系统默认 URL 关联打开，不指定 Edge、Chrome 或内置浏览器。
 
 内置终端默认 PowerShell；设置里可选 CMD。选中文字后 `Ctrl+C` 复制；`Ctrl+Shift+C` 始终用于复制；无选区的 `Ctrl+C` 发送给 CLI。文件使用 `Ctrl+S` 保存，快速打开遵循 Windows 文件类型关联。
 
