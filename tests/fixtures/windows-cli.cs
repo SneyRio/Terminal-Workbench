@@ -11,11 +11,12 @@ public class WindowsCliFixture {
  static string Root,Config,Sid,Transcript;static Dictionary<string,object> Settings;static int CancelCount=0;
  static void Write(string file,object value){var name=Path.Combine(Root,file);Directory.CreateDirectory(Root);File.WriteAllText(name,Json.Serialize(value),new UTF8Encoding(false));}
  static string Quote(string value){return "\""+value.Replace("\"","\\\"")+"\"";}
+ static object First(object items){foreach(var item in (IEnumerable)items)return item;throw new Exception("Empty hook collection");}
  static void Event(string name){
   if(Settings==null||!Settings.ContainsKey("hooks"))return;
   var hooks=(Dictionary<string,object>)Settings["hooks"];if(!hooks.ContainsKey(name))return;
-  var groups=(object[])hooks[name];var group=(Dictionary<string,object>)groups[0];var entries=(object[])group["hooks"];var hook=(Dictionary<string,object>)entries[0];
-  var list=(object[])hook["args"];var args=new List<string>();foreach(var arg in list)args.Add(Quote(Convert.ToString(arg)));
+  var group=(Dictionary<string,object>)First(hooks[name]);var hook=(Dictionary<string,object>)First(group["hooks"]);
+  var list=(IEnumerable)hook["args"];var args=new List<string>();foreach(var arg in list)args.Add(Quote(Convert.ToString(arg)));
   var start=new ProcessStartInfo(Convert.ToString(hook["command"]),String.Join(" ",args));start.UseShellExecute=false;start.CreateNoWindow=true;start.RedirectStandardInput=true;start.RedirectStandardOutput=true;start.RedirectStandardError=true;
   using(var process=Process.Start(start)){process.StandardInput.Write(Json.Serialize(new {hook_event_name=name,session_id=Sid,transcript_path=Transcript,cwd=Directory.GetCurrentDirectory(),prompt="Windows session fixture"}));process.StandardInput.Close();if(!process.WaitForExit(10000)){process.Kill();throw new Exception("Hook timeout");}if(process.ExitCode!=0)throw new Exception("Hook process failed");}
  }
