@@ -1,0 +1,11 @@
+{
+  "passed": true,
+  "checks": [
+    "NSIS installs per-user into a Unicode, space and ampersand path without elevation",
+    "installed executable launches the desktop UI and first-run guide",
+    "native Windows window close exits with code zero outside the Playwright launcher",
+    "silent uninstall removes application files and preserves current-user WbSpace data"
+  ],
+  "platform": "win32",
+  "version": "0.4.0"
+}

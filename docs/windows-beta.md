@@ -1,6 +1,6 @@
 # Windows x64 内测
 
-目标系统：Windows 10 22H2、Windows 11 x64。当前适配代码已完成，原生 Windows 验收和安装包发布仍待 GitHub Windows 工作流通过；不能把 macOS 单元测试当作 Windows 安装成功的证据。
+目标系统：Windows 10 22H2、Windows 11 x64。Windows Server 2022 x64 原生构建、25 项单元检查、14 项桌面流程及 4 项安装生命周期检查已通过。[验收运行](https://github.com/SneyRio/Terminal-Workbench/actions/runs/42179651138)。安装包发布见仓库 Releases；个人 Windows 10/11 桌面和真实 OAuth 仍需用户环境验收。
 
 ## 安装与使用
 

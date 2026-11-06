@@ -1,0 +1,25 @@
+{
+  "passed": true,
+  "platform": "win32",
+  "arch": "x64",
+  "checks": [
+    "packaged Windows x64 app boots with native window and Windows shell defaults",
+    "official identities have separate Windows launchers and login delegates to the system URL handler",
+    "real ConPTY starts native CLI fixture in Unicode/space paths; exec hooks and encoded PowerShell HUD update session and quota metadata",
+    "Ctrl+C copies exact terminal selections and normal inputs, while unselected Ctrl+C reaches the native CLI",
+    "native input drives lifecycle hooks and busy/idle transitions without model requests",
+    "Windows project file read/save preserves Unicode and version checking",
+    "Windows Markdown preview resolves local images and links using native drive paths",
+    "Windows Recycle Bin receives disposable project file only after confirmation; cancel preserves it",
+    "Windows stop/resume and seven-day trash restore keep native identity and remove replaced app records",
+    "Windows DPAPI encrypts provider keys while custom model sessions receive isolated runtime configuration",
+    "built-in Windows terminal runs the actual PowerShell shell through ConPTY",
+    "CMD selection creates a native command prompt and executes input",
+    "second Windows app instance exits without replacing active user state",
+    "encrypted Windows provider credentials remain usable after application restart"
+  ],
+  "errors": [],
+  "modelPrompts": 0,
+  "realOAuth": false,
+  "appProcessClosed": true
+}
