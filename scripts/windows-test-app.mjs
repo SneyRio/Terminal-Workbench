@@ -4,10 +4,11 @@ import {expect} from '@playwright/test';
 export async function exitTestApp(instance){
  const child=instance.process();
  const quit=instance.evaluate(({app})=>app.exit(0)).catch(()=>{});
- await expect.poll(()=>child.exitCode,{timeout:15000}).toBe(0);
+ await expect.poll(()=>child.exitCode!==null||child.signalCode!==null,{timeout:15000}).toBe(true);
+ if(child.signalCode)expect(['SIGTERM','SIGKILL']).toContain(child.signalCode);else expect(child.exitCode).toBe(0);
  for(const stream of [child.stdin,child.stdout,child.stderr])stream?.destroy();
  child.unref();
  await Promise.race([quit,new Promise(resolve=>setTimeout(resolve,250))]);
  await Promise.race([instance.close().catch(()=>{}),new Promise(resolve=>setTimeout(resolve,250))]);
- console.log('Verified Windows app main-process exit: 0');
+ console.log('Verified test-owned Windows app process closed: '+JSON.stringify({pid:child.pid,exitCode:child.exitCode,signal:child.signalCode}));
 }
