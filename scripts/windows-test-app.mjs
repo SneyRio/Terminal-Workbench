@@ -3,7 +3,8 @@ import {expect} from '@playwright/test';
 // Verify the actual app's exit first, then release test-owned transport streams.
 export async function exitTestApp(instance){
  const child=instance.process();
- const quit=instance.evaluate(({app})=>app.exit(0)).catch(()=>{});
+ const remotePid=await instance.evaluate(()=>process.pid);expect(remotePid).toBe(child.pid);
+ const quit=instance.evaluate(({app,dialog})=>{dialog.showMessageBoxSync=()=>1;app.quit();}).catch(error=>console.log('Quit transport closed: '+error.message));
  await expect.poll(()=>child.exitCode!==null||child.signalCode!==null,{timeout:15000}).toBe(true);
  if(child.signalCode)expect(['SIGTERM','SIGKILL']).toContain(child.signalCode);else expect(child.exitCode).toBe(0);
  for(const stream of [child.stdin,child.stdout,child.stderr])stream?.destroy();
