@@ -1,0 +1,20 @@
+{
+  "passed": true,
+  "packaged": false,
+  "checks": [
+    "UI resume replaces interrupted source only after exact native session readiness, preserving name, context file and cwd",
+    "resuming an active terminal reuses the existing session",
+    "concurrent resume requests create one process and never put replacement sources in trash",
+    "manual delete can be canceled and otherwise archives seven-day metadata plus a readonly context checkpoint",
+    "failed trash restore leaves the original deleted item and cleans the failed embedded target",
+    "wrong native session identity cannot silently replace deleted context",
+    "persistence failure rolls back replacement and preserves deleted record",
+    "trash UI restores context into its workspace and consumes the deleted item only on success",
+    "restore keeps split layout and unrelated live shell process",
+    "recently deleted renders collapsible workspace/session hierarchy across multiple projects",
+    "restoring into a removed workspace recreates its saved local project references",
+    "missing project path preserves trash and does not create an empty workspace",
+    "restart prunes expired records, retains seven-day trash, and rolls back an incomplete replacement without deleting original files"
+  ],
+  "errors": []
+}
