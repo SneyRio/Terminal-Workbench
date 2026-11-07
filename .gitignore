@@ -18,3 +18,5 @@ vendor/python/**/__pycache__/
 *.p12
 *.pfx
 .credentials.json
+
+.qoder/
