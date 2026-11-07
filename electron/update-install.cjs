@@ -36,18 +36,33 @@ relaunch
 
 const windowsHelper=`$ErrorActionPreference = 'Stop'
 $exe = $env:WB_UPDATE_EXE
+$log = $env:WB_UPDATE_RESULT + '.log'
+function Log($text) { Add-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' ' + $text) -Encoding UTF8 }
 function Report($ok, $reason) {
+  Log ('result ok=' + $ok + ' reason=' + $reason)
   $json = @{ version = $env:WB_UPDATE_VERSION; ok = $ok; reason = $reason } | ConvertTo-Json -Compress
   [IO.File]::WriteAllText($env:WB_UPDATE_RESULT, $json)
 }
 try {
+  Log 'waiting for app exit'
   $old = Get-Process -Id ([int]$env:WB_UPDATE_PID) -ErrorAction SilentlyContinue
   if ($old -and -not $old.WaitForExit(60000)) { Report $false 'timeout'; exit 1 }
   Start-Sleep -Milliseconds 500
   $dir = Split-Path -Parent $exe
-  $installer = Start-Process -FilePath $env:WB_UPDATE_INSTALLER -ArgumentList "/S --updated /D=$dir" -PassThru -Wait
-  if ($installer.ExitCode -ne 0) { Report $false ('installer-' + $installer.ExitCode) } else { Report $true 'installed' }
+  Log ('starting installer into ' + $dir)
+  # Start-Process -Wait also waits for every descendant, which can outlive the installer itself.
+  $installer = Start-Process -FilePath $env:WB_UPDATE_INSTALLER -ArgumentList "/S --updated /D=$dir" -PassThru
+  $null = $installer.Handle
+  if (-not $installer.WaitForExit(600000)) {
+    Stop-Process -Id $installer.Id -Force -ErrorAction SilentlyContinue
+    Report $false 'installer-timeout'
+  } elseif ($installer.ExitCode -ne 0) {
+    Report $false ('installer-' + $installer.ExitCode)
+  } else {
+    Report $true 'installed'
+  }
 } catch {
+  Log ('error ' + $_)
   Report $false 'error'
 }
 Start-Process -FilePath $exe

@@ -44,7 +44,7 @@ jobs:
         timeout-minutes: 5
       - run: node scripts/release-windows.mjs
       - run: node scripts/windows-installer-smoke.mjs
-        timeout-minutes: 5
+        timeout-minutes: 12
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -61,7 +61,7 @@ jobs:
             release/windows/安装说明.txt
           if-no-files-found: error
   macos:
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
