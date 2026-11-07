@@ -112,7 +112,10 @@ async function launchHelper({platform,target,artifact,dir,version,pid=process.pi
   const script=path.join(dir,'install-update.ps1');
   await fsp.writeFile(script,windowsHelper);
   const env={...process.env,WB_UPDATE_PID:String(pid),WB_UPDATE_EXE:target,WB_UPDATE_INSTALLER:artifact,WB_UPDATE_RESULT:result,WB_UPDATE_VERSION:version};
-  const child=spawner('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script],{detached:true,windowsHide:true,stdio:'ignore',env});child.unref();return child;
+  // A detached PowerShell starts without a console and can exit at once; undetached it still outlives the app on Windows.
+  const output=fs.openSync(result+'.out','a');
+  try{const child=spawner('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script],{windowsHide:true,stdio:['ignore',output,output],env});child.unref();return child;}
+  finally{fs.closeSync(output);}
  }
  throw new Error('当前平台不支持一键更新');
 }
