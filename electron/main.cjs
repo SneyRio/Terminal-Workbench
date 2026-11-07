@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, safeStorage, net } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, safeStorage, session } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { existsSync } = require('node:fs');
@@ -46,8 +46,16 @@ const notify = (channel, payload) => { if (win && !win.isDestroyed()) win.webCon
 const pushState = () => notify('state:changed', store.state);
 const updateDir=path.join(dataRoot,'updates.noindex');
 const updateTarget=()=>updateInstall.resolveInstall({platform:process.platform,arch:process.arch,isPackaged:app.isPackaged,exePath:app.getPath('exe')});
-// net.fetch follows the system proxy, which plain Node fetch ignores.
-const updater=updates.createUpdater({current:app.getVersion(),dir:updateDir,fetcher:(...args)=>net.fetch(...args),emit:state=>notify('updates:state',state),resolveInstall:updateTarget,prepare:(file,version)=>process.platform==='darwin'?updateInstall.prepareMacBundle(file,updateDir,version,updateTarget().target):file});
+// Update traffic has its own session: a chosen proxy reaches nothing else, and only trusted hosts can be contacted, redirects included.
+let updateSessionGuarded=false,appliedUpdateProxy='';
+async function updateFetch(...args){
+  const updateSession=session.fromPartition('wbspace-updates');
+  if(!updateSessionGuarded){updateSession.webRequest.onBeforeRequest((details,done)=>done({cancel:!updates.isTrustedUpdateUrl(details.url)}));updateSessionGuarded=true;}
+  const proxy=store.state.settings.updateProxy||'';
+  if(appliedUpdateProxy!==proxy){await updateSession.setProxy(proxy?{proxyRules:proxy}:{mode:'system'});await updateSession.closeAllConnections();appliedUpdateProxy=proxy;}
+  return updateSession.fetch(...args);
+}
+const updater=updates.createUpdater({current:app.getVersion(),dir:updateDir,fetcher:updateFetch,emit:state=>notify('updates:state',state),resolveInstall:updateTarget,prepare:(file,version)=>process.platform==='darwin'?updateInstall.prepareMacBundle(file,updateDir,version,updateTarget().target):file});
 let pendingUpdate=false;
 const draftWrites=new DraftBatch(store,pushState);
 const accountDir = accountId => { const a=store.state.accounts.find(a=>a.id===accountId);return a?.source==='existing' ? profileDiscovery.existingDirectory(a) : path.join(dataRoot,'accounts',accountId); };
@@ -718,6 +726,7 @@ function registerHandlers() {
   register('agents:list',()=>agentList());
   register('agents:scan',agentId=>scanAgent(agentId));
   register('agents:install',agentId=>installAgent(agentId));
+  register('updates:set-proxy',async value=>{const proxy=updates.normalizeProxy(value);await store.update(s=>{s.settings.updateProxy=proxy;});pushState();return proxy;});
   register('updates:state',()=>updater.state());
   register('updates:check',()=>updater.check());
   register('updates:download',()=>updater.download());

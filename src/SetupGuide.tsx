@@ -18,14 +18,17 @@ function channelLabel(osPlatform?:string,channel?:string){
  if(osPlatform==='win32')return channel==='signed'?'正式版 · 已签名':'正式版 · 安装包尚未签名';
  return channel==='notarized'?'正式版 · 已公证':channel==='signed'?'正式版 · 已签名，尚未公证':'正式版 · 安装包尚未签名/公证';
 }
-export function ReleaseSettings({onGuide,onError,channel,osPlatform}:{osPlatform?:string;channel?:string;onGuide:()=>void;onError:(e:unknown)=>void}){
- const [update,setUpdate]=useState<any>(null),[checkError,setCheckError]=useState(''),[busy,setBusy]=useState(false),[backup,setBackup]=useState('');
+export function ReleaseSettings({onGuide,onError,channel,osPlatform,proxy}:{osPlatform?:string;channel?:string;proxy?:string;onGuide:()=>void;onError:(e:unknown)=>void}){
+ const [update,setUpdate]=useState<any>(null),[checkError,setCheckError]=useState(''),[busy,setBusy]=useState(false),[backup,setBackup]=useState(''),[proxyText,setProxyText]=useState(proxy||''),[proxyNote,setProxyNote]=useState('');
+ useEffect(()=>setProxyText(proxy||''),[proxy]);
+ const saveProxy=async()=>{setProxyNote('');try{const saved=await call<string>('updates:set-proxy',proxyText);setProxyText(saved);setProxyNote(saved?'已保存，检查和下载更新将使用此代理':'已清除，更新将使用系统代理');}catch(e){setProxyNote(e instanceof Error?e.message:String(e));}};
  useEffect(()=>{void call('updates:state').then(setUpdate).catch(()=>{});return window.accountor?.on('updates:state',setUpdate);},[]);
  const phase=update?.phase;
  const check=async()=>{setBusy(true);setCheckError('');try{setUpdate(await call('updates:check'));}catch(e){setCheckError(e instanceof Error?e.message:String(e));}finally{setBusy(false);}};
  const save=async()=>{setBusy(true);try{const p=await call<string>('data:backup');setBackup(p);}catch(e){onError(e);}finally{setBusy(false);}};
  const percent=update?.total?Math.min(100,Math.round(update.received/update.total*100)):0;
  return <section className="release-settings"><h3>安装与数据</h3><p className="muted">{channelLabel(osPlatform,channel)} · {osPlatform==='win32'?'Windows x64':'macOS Apple Silicon'}。更新由你点击按钮触发，下载和校验期间不影响会话，只有确认重启时才会退出应用。</p><div className="setup-actions"><button className="secondary" onClick={onGuide}>首次启动指南</button><button className="secondary" disabled={busy||phase==='downloading'||phase==='preparing'} onClick={()=>void check()}>{busy?'处理中…':'检查更新'}</button><button className="secondary" disabled={busy} onClick={()=>void save()}>立即备份配置</button><button className="text-button" onClick={()=>void call('data:show-backups').catch(onError)}>查看本机备份</button></div>
+ <div className="update-proxy"><label className="field">更新代理（可选）<input aria-label="更新代理" value={proxyText} onChange={e=>setProxyText(e.target.value)} placeholder="留空使用系统代理，例如 http://127.0.0.1:7897"/></label><button className="secondary" disabled={(proxy||'')===proxyText.trim()} onClick={()=>void saveProxy()}>保存代理</button></div>{proxyNote&&<p className="muted" role="status">{proxyNote}</p>}
  {checkError&&<p role="status">{checkError}</p>}
  {!checkError&&update?.message&&phase==='idle'&&<p role="status">{update.message}</p>}
  {!checkError&&phase==='available'&&<div className="update-panel"><p role="status">{update.message}{update.size?` 安装包 ${megabytes(update.size)}。`:''}</p>{update.error&&<p role="alert" className="update-error">{update.error}</p>}{update.mode==='auto'?<button className="primary" onClick={()=>void call('updates:download').catch(onError)}>下载并更新到 {update.latest}</button>:<><p className="muted">{update.reason}</p><button className="secondary" onClick={()=>void call('external:open',update.url).catch(onError)}>打开版本下载页</button></>}</div>}

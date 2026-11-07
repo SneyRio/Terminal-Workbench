@@ -9,6 +9,7 @@ const releasePage=`https://github.com/${repository}/releases`;
 const checksumAsset='SHA256SUMS.txt';
 // GitHub serves release files from these hosts after redirecting; anything else is refused.
 const downloadHosts=new Set(['github.com','release-assets.githubusercontent.com','objects.githubusercontent.com']);
+const updateHosts=new Set(['api.github.com',...downloadHosts]);
 const maxPackageBytes=1024*1024*1024;
 const stallTimeoutMs=60000;
 
@@ -26,7 +27,7 @@ function pickAsset(data,platform,arch){
 }
 
 async function check(current,fetcher=fetch,platform=process.platform,arch=process.arch){
- let response;try{response=await fetcher(endpoint,{headers:{Accept:'application/vnd.github+json','User-Agent':'Terminal-Workbench'},signal:AbortSignal.timeout(10000),redirect:'error'});}catch{throw new Error('网络不可用或请求超时，请检查网络后重试');}
+ let response;try{response=await fetcher(endpoint,{headers:{Accept:'application/vnd.github+json','User-Agent':'Terminal-Workbench'},signal:AbortSignal.timeout(10000),redirect:'error'});}catch{throw new Error('网络不可用或请求超时，请检查网络后重试，也可以在下方设置更新代理');}
  if(response.status===404)return {status:'unpublished',current,url:releasePage,message:'尚未发布可下载版本，源码提交不等于安装包发布。'};
  if(!response.ok)throw new Error(response.status===403||response.status===429?'更新服务请求受限，请稍后重试':'暂时无法检查更新');
  const body=await response.text();if(body.length>512*1024)throw new Error('更新信息过大');const data=JSON.parse(body);
@@ -34,6 +35,22 @@ async function check(current,fetcher=fetch,platform=process.platform,arch=proces
  const latest=data.tag_name.replace(/^v/,'');
  if(!newer(data.tag_name,current))return {status:'current',current,latest,url:releasePage,message:'当前版本无需更新。'};
  return {status:'available',current,latest,tag:data.tag_name,asset:pickAsset(data,platform,arch),url:releasePage,message:`发现新版本 ${latest}。`};
+}
+
+// Electron's fetch hides the address it was redirected to, so this is enforced on every request by the network layer.
+function isTrustedUpdateUrl(value){
+ try{const url=new URL(value);return url.protocol==='https:'&&updateHosts.has(url.hostname);}catch{return false;}
+}
+
+// Accepts `host:port` or a full proxy URL, and refuses anything that could carry credentials into saved settings.
+function normalizeProxy(value){
+ const text=typeof value==='string'?value.trim():'';
+ if(!text)return '';
+ let url;try{url=new URL(/^[a-z0-9]+:\/\//i.test(text)?text:'http://'+text);}catch{throw new Error('代理地址格式不正确，例如 http://127.0.0.1:7897');}
+ if(!['http:','https:','socks5:'].includes(url.protocol))throw new Error('代理只支持 http、https 和 socks5');
+ if(url.username||url.password)throw new Error('代理地址不能包含账号或密码');
+ if(!url.hostname||!url.port||(url.pathname&&url.pathname!=='/')||url.search||url.hash)throw new Error('代理地址需要包含主机和端口，例如 http://127.0.0.1:7897');
+ return `${url.protocol}//${url.hostname}:${url.port}`;
 }
 
 function assetUrl(tag,name){return `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`;}
@@ -78,7 +95,10 @@ async function downloadPackage({tag,asset,dir,fetcher=fetch,signal,onProgress=()
     if(received>asset.size)throw new Error('安装包大小与发布信息不符，已停止更新');
     hash.update(value);
     if(writeError)throw writeError;
-    if(!out.write(value))await new Promise((resolve,reject)=>{out.once('drain',resolve);out.once('error',reject);});
+    if(!out.write(value))await new Promise((resolve,reject)=>{
+     const drained=()=>{out.off('error',failed);resolve();},failed=error=>{out.off('drain',drained);reject(error);};
+     out.once('drain',drained);out.once('error',failed);
+    });
     onProgress(received,asset.size);
    }
    complete=true;
@@ -131,4 +151,4 @@ function createUpdater({current,dir,fetcher,emit=()=>{},resolveInstall,prepare,p
  };
 }
 
-module.exports={check,newer,parseVersion,pickAsset,parseChecksums,assetUrl,downloadPackage,createUpdater,releasePage,checksumAsset};
+module.exports={isTrustedUpdateUrl,normalizeProxy,check,newer,parseVersion,pickAsset,parseChecksums,assetUrl,downloadPackage,createUpdater,releasePage,checksumAsset};

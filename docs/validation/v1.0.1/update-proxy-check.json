@@ -1,0 +1,12 @@
+{
+  "passed": true,
+  "check": {
+    "status": "current",
+    "latest": "1.0.0"
+  },
+  "download": {
+    "status": 200,
+    "bytes": 413,
+    "blocked": true
+  }
+}

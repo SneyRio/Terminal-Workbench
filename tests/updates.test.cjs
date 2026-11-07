@@ -81,3 +81,22 @@ test('macOS helper does not touch the bundle while the app is still running',{sk
  await exec('/bin/sh',[script,String(process.pid),target,path.join(root,'none'),result,'1.0.0']).catch(()=>{});
  assert.equal(JSON.parse(await fs.readFile(result,'utf8')).reason,'timeout');assert.equal(await fs.access(target).then(()=>1,()=>0),1);
 });
+test('update proxy accepts plain and full addresses and rejects anything else',()=>{
+ assert.equal(updates.normalizeProxy(''),'');assert.equal(updates.normalizeProxy('  '),'');
+ assert.equal(updates.normalizeProxy('127.0.0.1:7897'),'http://127.0.0.1:7897');
+ assert.equal(updates.normalizeProxy(' http://127.0.0.1:7897/ '),'http://127.0.0.1:7897');
+ assert.equal(updates.normalizeProxy('socks5://localhost:1080'),'socks5://localhost:1080');
+ for(const bad of ['ftp://x:1','http://user:pw@x:1','127.0.0.1','http://x:1/path','http://x:1?a=1','not a url'])assert.throws(()=>updates.normalizeProxy(bad),undefined,bad);
+});
+test('a large download does not pile up listeners while waiting on the disk',async t=>{
+ const dir=await fixture(t),warnings=[],watch=w=>warnings.push(w.name);process.on('warning',watch);t.after(()=>process.off('warning',watch));
+ const size=64*1024*1024,big=Buffer.alloc(size,7),chunks=64,part=size/chunks;
+ const sum=sha(big),asset='big.zip';
+ const fetcher=async target=>{if(target.endsWith('/SHA256SUMS.txt'))return new Response(`${sum}  ${asset}\n`);let i=0;return new Response(new ReadableStream({pull(c){if(i>=chunks){c.close();return;}c.enqueue(big.subarray(i*part,(i+1)*part));i++;}}));};
+ const file=await updates.downloadPackage({tag:'v1.0.0',asset:{name:asset,size},dir,fetcher});
+ assert.equal((await fs.stat(file)).size,size);await new Promise(r=>setImmediate(r));assert.deepEqual(warnings.filter(w=>w==='MaxListenersExceededWarning'),[]);
+});
+test('update traffic may only reach GitHub over HTTPS',()=>{
+ for(const good of ['https://api.github.com/repos/x','https://github.com/a/b/releases/download/v1/f.zip','https://release-assets.githubusercontent.com/x','https://objects.githubusercontent.com/x'])assert.equal(updates.isTrustedUpdateUrl(good),true,good);
+ for(const bad of ['http://github.com/a','https://evil.invalid/a','https://github.com.evil.invalid/a','https://user@evil.invalid/github.com','file:///etc/passwd','nonsense',''])assert.equal(updates.isTrustedUpdateUrl(bad),false,bad);
+});

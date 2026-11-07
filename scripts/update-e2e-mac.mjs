@@ -1,12 +1,14 @@
 // Drives a real packaged app through the update button and replaces it in /Applications.
 // Never touches /Applications/WbSpace.app: it uses its own bundle name, an isolated data directory and
 // its own bundle identifier. A copy sharing the real identifier makes macOS open it in place of the real app.
-import {_electron as electron} from 'playwright';import {expect} from '@playwright/test';import fs from 'node:fs/promises';import path from 'node:path';import crypto from 'node:crypto';import {execFile} from 'node:child_process';import {promisify} from 'node:util';
-const exec=promisify(execFile),root=process.cwd(),next='9.9.9',source=path.join(root,'release/builds.noindex/WbSpace-darwin-arm64/WbSpace.app'),target=process.env.WB_E2E_TARGET||'/Applications/WbSpace-UpdateTest.app',testBundleId='local.wbspace.update-test',dir=path.join(root,'.test-data','update-e2e-'+Date.now()),data=path.join(dir,'data'),binary=path.join(target,'Contents/MacOS/WbSpace'),checks=[];
+import {_electron as electron} from 'playwright';import {expect} from '@playwright/test';import fs from 'node:fs/promises';import path from 'node:path';import os from 'node:os';import crypto from 'node:crypto';import {execFile} from 'node:child_process';import {promisify} from 'node:util';
+const exec=promisify(execFile),root=process.cwd(),next='9.9.9',source=path.join(root,'release/builds.noindex/WbSpace-darwin-arm64/WbSpace.app'),target=process.env.WB_E2E_TARGET||'/Applications/WbSpace-UpdateTest.app',testBundleId='local.wbspace.update-test',dir=path.join(root,'.test-data','update-e2e-'+Date.now()),
+// Outside ~/Documents: the relaunched app would otherwise wait on a system folder permission prompt.
+data=await fs.mkdtemp(path.join(os.tmpdir(),'wbspace-update-e2e-')),binary=path.join(target,'Contents/MacOS/WbSpace'),checks=[];
 if(path.resolve(target)==='/Applications/WbSpace.app')throw new Error('Refusing to replace the installed app');
 if(await fs.access(target).then(()=>true,()=>false))throw new Error('Test bundle already exists: '+target);
 const {version:current}=JSON.parse(await fs.readFile('package.json','utf8'));
-await fs.mkdir(data,{recursive:true});await fs.mkdir(path.join(root,'test-results'),{recursive:true});
+await fs.mkdir(dir,{recursive:true});await fs.mkdir(path.join(root,'test-results'),{recursive:true});
 const pack=path.join(dir,'pack'),packed=path.join(pack,'WbSpace.app'),asset=`WbSpace-${next}-mac-arm64-unsigned.zip`,zip=path.join(dir,asset);
 await fs.mkdir(pack);await exec('/usr/bin/ditto',[source,packed]);
 const manifest=path.join(packed,'Contents/Resources/app/package.json');await fs.writeFile(manifest,JSON.stringify({...JSON.parse(await fs.readFile(manifest,'utf8')),version:next}));
@@ -17,7 +19,7 @@ const bytes=await fs.readFile(zip),goodSum=crypto.createHash('sha256').update(by
 await exec('/usr/bin/ditto',[source,target]);
 await rebrand(target);
 await fs.writeFile(path.join(data,'state.json'),JSON.stringify({accounts:[],workspaces:[],sessions:[],onboarding:{completedAt:1},drafts:{e2e:{text:'UNSAVED',baseText:'BASE',workspaceId:'',time:Date.now()}},settings:{claudePath:path.join(dir,'missing-cli'),theme:'dark'}}));
-const stubNetwork=(app,sum)=>app.evaluate(({net},cfg)=>{const fs=process.getBuiltinModule('node:fs');net.fetch=async url=>{
+const stubNetwork=(app,sum)=>app.evaluate(({session},cfg)=>{const fs=process.getBuiltinModule('node:fs');session.fromPartition('wbspace-updates').fetch=async url=>{
  if(url.endsWith('/releases/latest'))return new Response(JSON.stringify({tag_name:'v'+cfg.next,assets:[{name:cfg.asset,size:cfg.size},{name:'SHA256SUMS.txt',size:1}]}));
  if(url.endsWith('/SHA256SUMS.txt'))return new Response(cfg.sum+'  '+cfg.asset+'\n');
  if(url.endsWith('/'+cfg.asset))return new Response(fs.readFileSync(cfg.zip));
@@ -51,6 +53,7 @@ try{
  await app?.evaluate(({app})=>app.exit(0)).catch(()=>{});
  for(const pid of await relaunched())try{process.kill(Number(pid),'SIGTERM');}catch{}
  await new Promise(r=>setTimeout(r,1500));for(const pid of await relaunched())try{process.kill(Number(pid),'SIGKILL');}catch{}
+ await fs.rm(data,{recursive:true,force:true}).catch(()=>{});
  for(const name of await fs.readdir(path.dirname(target)))if(name===path.basename(target)||name.startsWith(path.basename(target)+'.update-old'))await fs.rm(path.join(path.dirname(target),name),{recursive:true,force:true});
 }
 await exec('/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister',['-u',target]).catch(()=>{});
