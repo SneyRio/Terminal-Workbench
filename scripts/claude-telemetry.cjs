@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {taskText}=require('../electron/session-titles.cjs');
 const {renderStatusLine}=require('../electron/statusline.cjs');
+const {parseQoderCredits}=require('../electron/agent-usage.cjs');
 const cancellation=new AbortController();
 for(const signal of ['SIGTERM','SIGHUP','SIGINT'])process.once(signal,()=>{cancellation.abort();process.exit(0);});
 let input = '';
@@ -14,7 +15,7 @@ process.stdin.on('end', async () => {
     const key = process.env.ACCOUNTOR_RUN_ID;
     const output = { time: Date.now() };
     if (process.argv[2] === 'usage') {
-      output.usage = data.rate_limits || null;
+      output.usage = data.rate_limits || parseQoderCredits(data.credits);
       output.sessionId = data.session_id;
     } else {
       output.event = data.hook_event_name;

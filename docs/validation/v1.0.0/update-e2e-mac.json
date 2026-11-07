@@ -1,0 +1,17 @@
+{
+  "passed": true,
+  "checks": [
+    "tampered package is rejected and the update stays retryable",
+    "valid package downloads, passes checksum and bundle validation and offers restart",
+    "declining the unsaved-work prompt keeps the app running and unchanged",
+    "bundle in /Applications is replaced with 9.9.9 after confirmation",
+    "app relaunches on its own as the new version using the same data directory",
+    "unsaved drafts survive and the normal upgrade snapshot is taken",
+    "downloaded package, staged bundle and old bundle are all cleaned up",
+    "replaced bundle keeps a valid signature structure and carries no quarantine flag"
+  ],
+  "from": "1.0.0",
+  "to": "9.9.9",
+  "target": "/Applications/WbSpace-UpdateTest.app",
+  "modelPrompts": 0
+}

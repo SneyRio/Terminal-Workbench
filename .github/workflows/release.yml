@@ -1,0 +1,156 @@
+name: Build and release
+on:
+  push:
+    branches: [main, codex/windows-support, codex/windows-cli-discovery]
+    paths-ignore: ["docs/**", "README.md", "design-qa.md"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - id: version
+        shell: bash
+        run: echo "version=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
+      - run: npm ci --ignore-scripts
+      - run: node node_modules/electron/install.js
+      - uses: actions/cache@v4
+        id: pty-cache
+        with:
+          path: node_modules/node-pty/build
+          key: windows-2022-x64-electron-45.2.2-nodepty-1.1.0-${{ hashFiles('package-lock.json') }}
+      - run: npm run rebuild:native
+        if: steps.pty-cache.outputs.cache-hit != 'true'
+      - uses: actions/cache/save@v4
+        if: steps.pty-cache.outputs.cache-hit != 'true'
+        with:
+          path: node_modules/node-pty/build
+          key: windows-2022-x64-electron-45.2.2-nodepty-1.1.0-${{ hashFiles('package-lock.json') }}
+      - run: node --test tests/updates.test.cjs tests/agent-catalog.test.cjs tests/cli-discovery.test.cjs tests/file-trash.test.cjs tests/platform.test.cjs tests/release-readiness.test.cjs tests/performance.test.cjs tests/session-history.test.cjs tests/session-titles.test.cjs
+      - run: npm run package:win
+      - run: ./scripts/build-windows-fixture.ps1
+      - run: npm run test:windows
+        timeout-minutes: 5
+      - run: node scripts/release-windows.mjs
+      - run: node scripts/windows-installer-smoke.mjs
+        timeout-minutes: 5
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-validation
+          path: test-results/windows-*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WbSpace-windows-x64
+          path: |
+            release/windows/*-setup.exe
+            release/windows/*-portable.zip
+            release/windows/SHA256SUMS.txt
+            release/windows/release-manifest.json
+            release/windows/安装说明.txt
+          if-no-files-found: error
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: node node_modules/electron/install.js
+      - run: npm run rebuild:native
+      - run: node --test tests/updates.test.cjs tests/agent-catalog.test.cjs tests/release-readiness.test.cjs
+      - run: npm run release:mac
+      - run: mkdir -p test-results && node scripts/release-readiness-regression.mjs
+        timeout-minutes: 5
+        env:
+          ACCOUNTOR_EXECUTABLE: ${{ github.workspace }}/release/builds.noindex/WbSpace-darwin-arm64/WbSpace.app/Contents/MacOS/WbSpace
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-validation
+          path: test-results/release-readiness-regression.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WbSpace-macos-arm64
+          path: |
+            release/WbSpace-*-mac-arm64-*.dmg
+            release/WbSpace-*-mac-arm64-*.zip
+            release/WbSpace-*-mac-arm64-*.sha256
+            release/WbSpace-*-mac-arm64-*.json
+            release/WbSpace-*-mac-arm64-*-README.txt
+          if-no-files-found: error
+  publish:
+    if: github.ref == 'refs/heads/main'
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.windows.outputs.version }}
+      TAG: v${{ needs.windows.outputs.version }}
+    steps:
+      - name: Skip versions already released
+        id: existing
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then echo "skip=true" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/checkout@v4
+        if: steps.existing.outputs.skip == 'false'
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        if: steps.existing.outputs.skip == 'false'
+        with:
+          name: WbSpace-windows-x64
+          path: bundle
+      - uses: actions/download-artifact@v4
+        if: steps.existing.outputs.skip == 'false'
+        with:
+          name: WbSpace-macos-arm64
+          path: mac
+      - uses: actions/download-artifact@v4
+        if: steps.existing.outputs.skip == 'false'
+        with:
+          name: windows-validation
+          path: validation
+      - name: Combine and verify release files
+        if: steps.existing.outputs.skip == 'false'
+        run: |
+          cat mac/*.sha256 >> bundle/SHA256SUMS.txt
+          rm mac/*.sha256
+          mv mac/* bundle/
+          # GitHub renames assets with non-ASCII names to default.txt.
+          mv bundle/安装说明.txt bundle/INSTALL-WINDOWS.txt
+          cd bundle
+          sha256sum --check SHA256SUMS.txt
+          test -f "WbSpace-$VERSION-windows-x64-setup.exe"
+          test -f "WbSpace-$VERSION-mac-arm64-unsigned.zip"
+          python3 - <<'PY'
+          import json
+          for file in ['../validation/windows-smoke.json', '../validation/windows-installer.json']:
+              data=json.load(open(file))
+              assert data['passed'] and data['platform']=='win32', file
+          PY
+      - name: Publish release
+        if: steps.existing.outputs.skip == 'false'
+        run: |
+          # Stay a draft until every file is attached, so the update check never sees a partial release.
+          gh release create "$TAG" bundle/* validation/windows-smoke.json validation/windows-installer.json --target "$GITHUB_SHA" --title "WbSpace $VERSION" --notes-file docs/release-notes.md --draft
+          gh release edit "$TAG" --draft=false --latest

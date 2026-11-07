@@ -1,0 +1,28 @@
+{
+  "passed": true,
+  "packaged": true,
+  "checks": [
+    "connections saved before the protocol field get it inferred from their address",
+    "four agents listed; installed shows available, unscanned shows scan and download without any automatic scan",
+    "download shows the exact official command first and declining runs nothing",
+    "manual scan reports a real result",
+    "choosing /chat/completions disables Claude and maps to OpenCode",
+    "/responses offers only supporting agents; Qoder stays unavailable and there is no Gemini protocol",
+    "pasted full endpoint is normalized and the key stays out of state",
+    "session launches the selected agent in the built-in terminal with provider settings and no Claude-specific environment",
+    "agent sessions run as live terminals and cannot enter the Claude account switch",
+    "existing Claude connection on an OpenAI endpoint explains the problem instead of failing silently",
+    "editing that connection maps it to a supporting agent in one save",
+    "Qoder cannot be chosen for a custom provider",
+    "choosing Qoder moves to the official account flow and creates an account with no provider settings",
+    "a signed-out Qoder account asks for sign-in instead of starting",
+    "official login runs in an isolated directory, ignores an inherited token and is detected from status",
+    "signed-in Qoder starts a session with its own account directory",
+    "workspace settings pick a default agent, filter accounts to it and disable agents with no account",
+    "new session uses the workspace default agent",
+    "the menu starts a session with another agent without changing the workspace default",
+    "an agent with no account leads to account setup",
+    "sessions show [agent|name]title and the hover text carries the full name"
+  ],
+  "modelPrompts": 0
+}

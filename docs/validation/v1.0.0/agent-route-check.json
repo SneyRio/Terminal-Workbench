@@ -1,0 +1,60 @@
+{
+  "passed": true,
+  "results": [
+    {
+      "agent": "codex-cli",
+      "protocol": "responses",
+      "authType": "bearer",
+      "expected": "/v1/responses",
+      "passed": true,
+      "sent": "bearer",
+      "paths": [
+        "/v1/responses"
+      ]
+    },
+    {
+      "agent": "opencode",
+      "protocol": "chat",
+      "authType": "bearer",
+      "expected": "/v1/chat/completions",
+      "passed": true,
+      "sent": "bearer",
+      "paths": [
+        "/v1/chat/completions"
+      ]
+    },
+    {
+      "agent": "opencode",
+      "protocol": "responses",
+      "authType": "bearer",
+      "expected": "/v1/responses",
+      "passed": true,
+      "sent": "bearer",
+      "paths": [
+        "/v1/responses"
+      ]
+    },
+    {
+      "agent": "opencode",
+      "protocol": "messages",
+      "authType": "bearer",
+      "expected": "/v1/messages",
+      "passed": true,
+      "sent": "bearer",
+      "paths": [
+        "/v1/messages"
+      ]
+    },
+    {
+      "agent": "opencode",
+      "protocol": "messages",
+      "authType": "api-key",
+      "expected": "/v1/messages",
+      "passed": true,
+      "sent": "x-api-key",
+      "paths": [
+        "/v1/messages"
+      ]
+    }
+  ]
+}

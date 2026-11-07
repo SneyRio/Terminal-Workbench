@@ -11,6 +11,7 @@ try{
  let page=await app.firstWindow();page.on('pageerror',e=>errors.push(e.message));await page.setViewportSize({width:1440,height:1024});await page.waitForFunction(()=>!!window.accountor);
  const invoke=(channel,...args)=>page.evaluate(({channel,args})=>window.accountor.invoke(channel,...args),{channel,args});
  const workspace=await invoke('workspace:save',{name:'文件布局回归',projects:[{path:project}],backend:'embedded',rightOpen:true,rightWidth:420});
+ await invoke('setup:finish');await page.getByRole('dialog',{name:'首次启动指南'}).waitFor({state:'detached'});
  await page.locator('.workspace-nav').click();await page.getByRole('button',{name:'打开 Shell',exact:true}).click();
  await expect.poll(async()=>(await invoke('state:get')).sessions.length).toBe(1);const shell=(await invoke('state:get')).sessions[0];
  await invoke('terminal:input',shell.id,"printf 'LAYOUT_TERMINAL_ALIVE\\n'\r");
@@ -39,7 +40,7 @@ try{
  expect((await invoke('terminal:buffer',shell.id)).data).toContain('LAYOUT_TERMINAL_ALIVE');checks.push('restore preserves original right width, vertical split, editor and live PTY');
  await page.getByRole('button',{name:'放大文件内容'}).click();await page.getByRole('button',{name:'收起右侧辅助栏',exact:true}).click();await expect(page.locator('.center-panel')).not.toHaveAttribute('inert');
  await page.getByRole('button',{name:'展开右侧辅助栏',exact:true}).click();await expect(page.getByRole('button',{name:'放大文件内容'})).toBeVisible();checks.push('collapsing the maximized right panel restores terminal and retains draft');
- const ended=await invoke('terminal:start',{workspaceId:workspace.id,kind:'shell'});await page.locator('[data-session-id="'+ended.id+'"]').getByRole('button',{name:ended.title,exact:true}).click();await invoke('terminal:input',ended.id,'exit\r');
+ const ended=await invoke('terminal:start',{workspaceId:workspace.id,kind:'shell'});await page.locator('[data-session-id="'+ended.id+'"]').getByRole('button',{name:ended.title}).first().click();await invoke('terminal:input',ended.id,'exit\r');
  await expect.poll(async()=>(await invoke('state:get')).sessions.find(s=>s.id===ended.id).status).toBe('exited');
  await expect(page.locator('[data-session-id="'+ended.id+'"]')).toHaveCount(0);await expect(page.locator('.terminal-tabs>button').filter({hasText:'Shell'})).toHaveCount(1);
  await invoke('settings:save',{claudePath:fixture});const account=await invoke('account:add','退出测试');

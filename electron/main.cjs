@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, safeStorage, net } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { existsSync } = require('node:fs');
@@ -9,7 +9,10 @@ const { promisify } = require('node:util');
 const pty = require('node-pty');
 const gitView=require('./git.cjs');
 const {nextWorkspaceOrder}=require('./workspace-order.cjs');
-const {tools:agentTools,plannedTools,requireTool}=require('./agent-tools.cjs');
+const {tools:agentTools,requireTool}=require('./agent-tools.cjs');
+const agentCatalog=require('./agent-catalog.cjs');
+const agentInstall=require('./agent-install.cjs');
+const agentUsage=require('./agent-usage.cjs');
 const {inspectLegacy,retireLegacy}=require('./app-migration.cjs');
 const {taskText,defaultTitle,migrateTitle,applyTaskTitle,copyTitle,transcriptTitle}=require('./session-titles.cjs');
 const {pruneDeleted,findDeleted,forgetDeleted,archiveSession,replaceSession,deduplicateRecovered}=require('./session-history.cjs');
@@ -21,6 +24,7 @@ const exec = promisify(execFile);
 const profileDiscovery=require('./profile-discovery.cjs');
 const {backupBeforeUpgrade}=require('./release-support.cjs');
 const updates=require('./updates.cjs');
+const updateInstall=require('./update-install.cjs');
 const platformTools=require('./platform.cjs');
 const {WindowsCliDiscovery}=require('./cli-discovery.cjs');
 const windowsCli=new WindowsCliDiscovery();
@@ -40,6 +44,11 @@ const terminals = new Map();
 let win, quitting = false;
 const notify = (channel, payload) => { if (win && !win.isDestroyed()) win.webContents.send(channel, payload); };
 const pushState = () => notify('state:changed', store.state);
+const updateDir=path.join(dataRoot,'updates.noindex');
+const updateTarget=()=>updateInstall.resolveInstall({platform:process.platform,arch:process.arch,isPackaged:app.isPackaged,exePath:app.getPath('exe')});
+// net.fetch follows the system proxy, which plain Node fetch ignores.
+const updater=updates.createUpdater({current:app.getVersion(),dir:updateDir,fetcher:(...args)=>net.fetch(...args),emit:state=>notify('updates:state',state),resolveInstall:updateTarget,prepare:(file,version)=>process.platform==='darwin'?updateInstall.prepareMacBundle(file,updateDir,version,updateTarget().target):file});
+let pendingUpdate=false;
 const draftWrites=new DraftBatch(store,pushState);
 const accountDir = accountId => { const a=store.state.accounts.find(a=>a.id===accountId);return a?.source==='existing' ? profileDiscovery.existingDirectory(a) : path.join(dataRoot,'accounts',accountId); };
 const accountExecutable = async account => account.source==='existing'&&account.command ? (path.isAbsolute(account.command)?account.command:path.join(os.homedir(),'.local/bin',account.command)) : executable();
@@ -59,6 +68,83 @@ async function executable() {
   const options = platformTools.executableCandidates(configured);
   for (const option of options) { try { await fs.access(option, 1); return option; } catch {} }
   throw new Error('未找到 Claude CLI，请在设置中指定已安装的可执行文件');
+}
+
+const agentInstalling=new Map();
+// Claude is already detected automatically elsewhere, so its row reflects that instead of waiting for a scan.
+async function claudeScanState(){
+  const known=store.state.agentInstalls?.['claude-code'];
+  try{const file=await executable();return known?.path===file?known:{installed:true,path:file,version:'',issue:'',scannedAt:0};}
+  catch{return known?.installed?null:known||null;}
+}
+async function agentList(){const claude=await claudeScanState();return {protocols:agentCatalog.protocols.map(({id,label,placeholder,hint})=>({id,label,placeholder,hint})),agents:agentCatalog.agents.map(a=>({id:a.id,name:a.name,protocols:a.protocols,authTypes:a.authTypes,login:!!a.login,unavailable:a.unavailable||'',docs:a.docs,command:agentInstall.installCommand(a).text,scan:a.id==='claude-code'?claude:store.state.agentInstalls?.[a.id]||null,install:agentInstalling.get(a.id)||null}))};}
+async function scanAgent(id){
+  const agent=agentCatalog.agent(id);
+  let result;
+  if(id==='claude-code'){
+    try{const file=await executable();const {stdout}=await exec(file,['--version'],{env:cliEnv(null),windowsHide:true,timeout:15000,maxBuffer:256*1024});result={installed:true,path:file,version:/\d+\.\d+[\w.-]*/.exec(stdout)?.[0]||'',issue:'',scannedAt:Date.now()};}
+    catch{result=null;}
+  }
+  result||=await agentInstall.scan(agent,{home:os.homedir(),searchPath:platformTools.searchPath(process.env)});
+  await store.update(s=>{s.agentInstalls={...s.agentInstalls,[id]:result};});
+  notify('agents:state',await agentList());
+  return result;
+}
+const usageRefreshed=new Map();
+// Runs in the background so a slow usage service never delays a status check or a session start.
+async function refreshOfficialUsage(account,cli,env,force=false){
+  const reader=account.agentToolId==='codex-cli'?()=>{const shim=process.platform==='win32'&&!/\.exe$/i.test(cli);return agentUsage.readCodexUsage(cli,env,shim?{command:[process.env.ComSpec||'cmd.exe',['/d','/c',cli,'app-server']]}:{});}:account.agentToolId==='opencode'?async()=>{const shim=process.platform==='win32'&&!/\.exe$/i.test(cli);const {stdout}=await exec(shim?(process.env.ComSpec||'cmd.exe'):cli,[...(shim?['/d','/c',cli]:[]),'stats'],{env,windowsHide:true,timeout:20000,maxBuffer:1024*1024});return agentUsage.parseOpencodeStats(stdout);}:null;
+  if(!reader)return;
+  if(!force&&Date.now()-(usageRefreshed.get(account.id)||0)<30000)return;
+  usageRefreshed.set(account.id,Date.now());
+  const usage=await reader().catch(()=>null);
+  if(!usage)return;
+  await store.update(s=>{const a=s.accounts.find(a=>a.id===account.id);if(a)a.usage={...usage,time:Date.now()};});pushState();
+}
+const usesOfficialCli=account=>(account?.agentToolId||'claude-code')!=='claude-code'&&!account.connection;
+// Applies one account's isolated sign-in; inherited credentials would otherwise take precedence over it.
+async function officialEnv(account,cli){
+  const prepared=await agentCatalog.prepareOfficial(account.agentToolId,connections.officialHome(account.id,account.agentToolId));
+  const env=cliEnv(null);
+  delete env.CLAUDE_CONFIG_DIR;for(const name of prepared.clearEnv)delete env[name];
+  Object.assign(env,prepared.env);
+  const key=process.platform==='win32'?'Path':'PATH';env[key]=[path.dirname(cli),env[key]].join(process.platform==='win32'?';':':');
+  return {env,loginArgs:prepared.loginArgs,clearEnv:prepared.clearEnv};
+}
+async function agentExecutable(id){
+  const known=store.state.agentInstalls?.[id];
+  if(known?.path&&await fs.access(known.path,1).then(()=>true,()=>false))return known.path;
+  const result=await scanAgent(id);
+  if(!result.installed)throw new Error(`未检测到 ${agentCatalog.agent(id).name}，请到“账号与连接 → Agent 工具”扫描或下载`);
+  return result.path;
+}
+// Credentials may live outside the account directory, such as in the system keychain, so the CLI clears its own first.
+async function signOutManaged(account){
+  if(account.connection)return;
+  try{
+    const claude=(account.agentToolId||'claude-code')==='claude-code';
+    const args=claude?['auth','logout']:agentCatalog.officialProfile(account.agentToolId).logoutArgs;
+    if(!args)return;
+    const cli=claude?await executable():await agentExecutable(account.agentToolId);
+    const env=claude?cliEnv(connections.dir(account.id)):(await officialEnv(account,cli)).env;
+    const shim=process.platform==='win32'&&!/\.exe$/i.test(cli);
+    await exec(shim?(process.env.ComSpec||'cmd.exe'):cli,[...(shim?['/d','/c',cli]:[]),...args],{env,windowsHide:true,timeout:15000,maxBuffer:256*1024});
+  }catch{}
+}
+async function installAgent(id){
+  const agent=agentCatalog.agent(id);
+  if(agentInstalling.get(id)?.running)throw new Error('正在安装，请稍候');
+  const command=agentInstall.installCommand(agent);
+  const {response}=await dialog.showMessageBox(win,{type:'question',message:`下载并安装 ${agent.name}？`,detail:`将在本机执行以下官方安装命令：\n\n${command.text}\n\n来源：${agent.docs}`,buttons:['取消','下载并安装'],defaultId:1,cancelId:0});
+  if(response!==1)return false;
+  const update=next=>{agentInstalling.set(id,next);void agentList().then(list=>notify('agents:state',list));};
+  update({running:true,log:'',error:''});
+  let log='';
+  try{await agentInstall.runInstall(command,{onLog:text=>{log=text;update({running:true,log,error:''});}});update({running:false,log,error:''});}
+  catch(error){update({running:false,log,error:error.message});return false;}
+  const result=await scanAgent(id);
+  if(!result.installed)update({running:false,log,error:'安装命令已结束，但未扫描到可运行的程序，可能需要重新打开终端后再扫描'});
+  return result.installed;
 }
 
 async function installTelemetry(accountId) {
@@ -82,7 +168,16 @@ async function checkAccount(accountId) {
   requireTool(store.account(accountId).agentToolId);
   try {
     const account=store.account(accountId);
-    if(account.connection){await connections.env(account);await accountExecutable(account);await store.update(s=>Object.assign(s.accounts.find(a=>a.id===accountId),{status:'valid',authMethod:'custom-config',checkedAt:Date.now(),error:''}));pushState();return store.account(accountId);}
+    if(usesOfficialCli(account)){
+      const tool=account.agentToolId,cli=await agentExecutable(tool),{env}=await officialEnv(account,cli),home=connections.officialHome(accountId,tool),shim=process.platform==='win32'&&!/\.exe$/i.test(cli);
+      const run=async args=>{try{const {stdout,stderr}=await exec(shim?(process.env.ComSpec||'cmd.exe'):cli,[...(shim?['/d','/c',cli]:[]),...args],{env,windowsHide:true,timeout:15000,maxBuffer:256*1024});return {code:0,stdout,stderr};}catch(error){if(typeof error.code!=='number')throw error;return {code:error.code,stdout:error.stdout||'',stderr:error.stderr||''};}};
+      const data=await agentCatalog.officialProfile(tool).status(run,home);
+      await store.update(s=>{const a=s.accounts.find(a=>a.id===accountId);if(!a)return;const identity=data.loggedIn&&data.email?tool+'|'+data.email.toLowerCase()+'|'+data.org:'';Object.assign(a,{status:data.loggedIn?'valid':'login',email:data.email||data.username||'',authMethod:data.method||'',identity,duplicateOf:identity?s.accounts.find(other=>other.id!==accountId&&other.identity===identity)?.id:undefined,checkedAt:Date.now(),error:''});});
+      pushState();
+      if(data.loggedIn)void refreshOfficialUsage(account,cli,env);
+      return store.account(accountId);
+    }
+    if(account.connection){await connections.env(account);if(account.agentToolId&&account.agentToolId!=='claude-code')await agentExecutable(account.agentToolId);else await accountExecutable(account);await store.update(s=>Object.assign(s.accounts.find(a=>a.id===accountId),{status:'valid',authMethod:'custom-config',checkedAt:Date.now(),error:''}));pushState();return store.account(accountId);}
     const { stdout } = await exec(await accountExecutable(store.account(accountId)), ['auth', 'status', '--json'], { env: cliEnv(accountDir(accountId)), windowsHide:true,timeout: 15000, maxBuffer: 256 * 1024 });
     const data = JSON.parse(stdout);
     if(typeof data.loggedIn!=='boolean')throw new Error('Invalid auth status');
@@ -124,12 +219,15 @@ async function sourceIsEmpty(source){
 }
 
 async function startSession(input) {
-  const kind = ['claude', 'shell', 'login'].includes(input.kind) ? input.kind : 'claude';
+  let kind = ['claude', 'shell', 'login', 'agent'].includes(input.kind) ? input.kind : 'claude';
   const workspace = kind === 'login' ? null : store.workspace(input.workspaceId);
   const backend = 'embedded';
   const projects=kind==='login'?[]:(input.resumeProjects || workspace.projects);
   const acct = kind === 'shell' ? null : store.account(input.accountId || workspace?.accountId);
   if(acct)requireTool(acct.agentToolId);
+  if(kind==='login'&&acct?.connection)throw new Error('自定义供应商使用 API Key / Token，请在连接详情中编辑');
+  if(acct&&kind!=='shell'&&kind!=='login')kind=(acct.agentToolId||'claude-code')==='claude-code'?'claude':'agent';
+  if(kind==='agent'&&usesOfficialCli(acct)){await statusAccount(acct.id);if(store.account(acct.id).status==='login')throw new Error('该账号需要重新登录，请在账号中心通过系统默认浏览器授权');}
   if(kind==='claude'){await statusAccount(acct.id);if(store.account(acct.id).status==='login')throw new Error('该账号需要重新登录，请在账号中心通过系统默认浏览器授权');}
   if(workspace&&!projects.length)throw new Error('请先在工作空间设置中添加本地项目');
   const cwd = workspace ? await fs.realpath(input.resumeCwd || projects[0]?.path || '') : accountDir(acct.id);
@@ -144,7 +242,21 @@ async function startSession(input) {
     const cli=await executable().catch(()=>null);
     if(cli){env.Path=path.dirname(cli)+';'+platformTools.value(env,'PATH');args=platformTools.discoveredShellArgs(file,cli);}
   }
-  if (acct) {
+  const official=usesOfficialCli(acct);
+  if(kind==='agent'||(kind==='login'&&official)){
+    const cli=await agentExecutable(acct.agentToolId);
+    delete env.CLAUDE_CONFIG_DIR;
+    let cliArgs=[];
+    if(official){const prepared=await officialEnv(acct,cli);for(const name of prepared.clearEnv)delete env[name];Object.assign(env,prepared.env);if(kind==='login')cliArgs=prepared.loginArgs;
+      // Qoder hands its account balance to the status line; a Windows command shim cannot carry this JSON safely.
+      else if(acct.agentToolId==='qoder-cli'&&(process.platform!=='win32'||/\.exe$/i.test(cli))){
+        env.ELECTRON_RUN_AS_NODE='1';env.ACCOUNTOR_ACCOUNT_PROVIDER='custom';env.ACCOUNTOR_RUN_ID=sessionId;env.ACCOUNTOR_TELEMETRY_DIR=telemetryDir;
+        cliArgs=['--settings',JSON.stringify({statusLine:platformTools.hookSettings(process.execPath,path.join(root,'scripts/claude-telemetry.cjs'),null).statusLine})];
+      }}
+    const pathKey=process.platform==='win32'?'Path':'PATH';env[pathKey]=[path.dirname(cli),env[pathKey]].join(process.platform==='win32'?';':':');
+    file=cli;args=cliArgs;
+    if(process.platform==='win32'&&!/\.exe$/i.test(cli)){if(cli.includes('"'))throw new Error('无效的程序路径');file=process.env.ComSpec||'C:\\Windows\\System32\\cmd.exe';args=`/d /s /c ""${cli}"${cliArgs.length?' '+cliArgs.join(' '):''}"`;}
+  }else if (acct) {
     if(acct.source!=='existing')await installTelemetry(acct.id);
     file = await accountExecutable(acct);
     const telemetryScript=path.join(root,'scripts/claude-telemetry.cjs');
@@ -171,7 +283,7 @@ async function startSession(input) {
       if (extra.length) args.push('--add-dir', ...extra);
     }
   }
-  if(process.platform==='win32'&&acct&&!/\.exe$/i.test(file))throw new Error('Windows 请选择原生 Claude CLI 可执行文件 claude.exe');
+  if(process.platform==='win32'&&acct&&kind!=='agent'&&!official&&!/\.exe$/i.test(file))throw new Error('Windows 请选择原生 Claude CLI 可执行文件 claude.exe');
   if(!path.isAbsolute(file))throw new Error('请设置终端可执行文件的绝对路径');
   try{await fs.access(file,1);}catch{throw new Error('终端可执行文件不存在或无执行权限：'+file);}
   const record = { id: sessionId, workspaceId: workspace?.id || '', accountId: acct?.id || '', kind, backend, cwd, projects, pendingRestore:input.restoreSourceId,checkpoint:input.resumeFile||input.checkpointFile, handoffFile:input.handoffFile||input.inheritedHandoffFile, title: kind === 'login' ? '登录 · ' + acct.name : kind === 'shell' ? 'Shell' : 'Claude · ' + acct.name, createdAt: Date.now(), status: 'starting', groupId: input.groupId || sessionId, orientation: input.orientation || 'horizontal', authVerified:acct?store.account(acct.id).status==='valid':false, recovery:input.handoffFile?'handoff':input.resumeId || input.resumeFile ? 'requested' : undefined };
@@ -360,21 +472,21 @@ function registerHandlers() {
     if (!spec||typeof spec.name!=='string'||!spec.name.trim()) throw new Error('请输入账号别名');
     const custom=spec.provider==='custom';
     if(spec.provider&&!['subscription','custom'].includes(spec.provider))throw new Error('不支持的账号类型');
-    const account = {agentToolId:'claude-code',id:id(),name:spec.name.trim().slice(0,80),source:'managed',provider:custom?'custom':'subscription',status:custom?'unknown':'login',email:'',createdAt:Date.now(),usage:null};
+    const account = {agentToolId:custom?(spec.agentToolId||'claude-code'):spec.agentToolId&&agentCatalog.agent(spec.agentToolId).login?spec.agentToolId:'claude-code',id:id(),name:spec.name.trim().slice(0,80),source:'managed',provider:custom?'custom':'subscription',status:custom?'unknown':'login',email:'',createdAt:Date.now(),usage:null};
     if(custom){account.connection=connection(spec);account.keyVersion=id();}
-    try{await connections.provision(account,await executable());if(custom)await connections.writeKey(account.id,spec.apiKey,account.keyVersion);await store.update(s=>s.accounts.push(account));}
+    try{await connections.provision(account,custom||account.agentToolId!=='claude-code'?'':await executable());if(custom)await connections.writeKey(account.id,spec.apiKey,account.keyVersion);await store.update(s=>s.accounts.push(account));}
     catch(e){await connections.cleanup(account).catch(()=>{});throw e;}
     pushState();return account;
   });
   register('account:configure',async(accountId,input)=>{
     const account=store.account(accountId);if(!account.connection)throw new Error('现有脚本引用由原配置管理，请新建自定义连接');
-    const config=connection(input);
+    const config=connection({...input,agentToolId:input.agentToolId||account.agentToolId});
     if(configuringAccounts.has(accountId))throw new Error('连接配置正在保存，请稍后重试');
     configuringAccounts.add(accountId);
     try{
     // Versioned encrypted files let in-flight launches keep their original config/key pair.
     const keyVersion=input.apiKey?id():account.keyVersion;
-    try{if(input.apiKey)await connections.writeKey(accountId,input.apiKey,keyVersion);await store.update(s=>{const a=s.accounts.find(a=>a.id===accountId);if(!a)throw new Error('连接已被移除');Object.assign(a,{connection:config,keyVersion,status:'unknown',checkedAt:undefined,error:'',usage:null});});}
+    try{if(input.apiKey)await connections.writeKey(accountId,input.apiKey,keyVersion);await store.update(s=>{const a=s.accounts.find(a=>a.id===accountId);if(!a)throw new Error('连接已被移除');Object.assign(a,{connection:config,agentToolId:input.agentToolId||a.agentToolId||'claude-code',keyVersion,status:'unknown',checkedAt:undefined,error:'',usage:null});});}
     catch(e){if(input.apiKey)await fs.rm(connections.secret(accountId,keyVersion),{force:true});throw e;}
     pushState();return store.account(accountId);
     }finally{configuringAccounts.delete(accountId);}
@@ -454,9 +566,13 @@ function registerHandlers() {
     }finally{deletingSessions.delete(sid);}
   });
   register('account:remove', async accountId => {
-    store.account(accountId);
+    const account=store.account(accountId);
     if (store.state.sessions.some(s => s.accountId === accountId && ['running','starting','busy','idle','external'].includes(s.status))) throw new Error('请先结束或解绑该账号的活动会话');
+    // Referenced local profiles belong to the user; only directories this app created are deleted.
+    const owned=account.source!=='existing';
+    if(owned)await signOutManaged(account);
     await store.update(s => { s.accounts = s.accounts.filter(a => a.id !== accountId); for (const w of s.workspaces) if (w.accountId === accountId) w.accountId = ''; }); pushState();
+    if(owned){try{await connections.cleanup(account);}catch{throw new Error('连接已移除，但本地目录未能删除，请手动删除：'+connections.dir(accountId));}}
   });
   register('terminal:start', startSession);
   register('terminal:buffer',sid=>{const t=terminals.get(sid);if(t)flushTerminal(t,sid,notify);return {data:t?.history.snapshot()||'',seq:t?.seq||0};});
@@ -492,6 +608,7 @@ function registerHandlers() {
   register('terminal:prepare-switch',async(sid,targetAccountId)=>{
     await pollTelemetry();
     const source=store.state.sessions.find(s=>s.id===sid),target=store.account(targetAccountId);
+    if((target.agentToolId||'claude-code')!=='claude-code')throw new Error('只能切换到同一 Agent 工具的账号');
     if(!source||source.kind!=='claude'||!['idle','exited'].includes(source.status))throw new Error('请等待当前 Claude 回合结束后再切换');
     if(await sourceIsEmpty(source))return {mode:'empty',nativeSupported:false,eventTime:source.eventTime,sourceName:store.account(source.accountId).name,targetName:target.name};
     const file=await sourceTranscript(source),bundle=await sourceHandoff(source,file);
@@ -502,6 +619,7 @@ function registerHandlers() {
   register('terminal:switch', async (sid, targetAccountId, options={}) => {
     if(restoringJobs.has(sid)||deletingSessions.has(sid)||store.state.sessions.find(s=>s.id===sid)?.pendingRestore)throw new Error('会话正在恢复或删除，请稍后重试');
     await pollTelemetry();
+    if((store.account(targetAccountId).agentToolId||'claude-code')!=='claude-code')throw new Error('只能切换到同一 Agent 工具的账号');
     const source = store.state.sessions.find(s => s.id === sid);
     if(options.expectedEventTime!==undefined&&options.expectedEventTime!==source?.eventTime)throw new Error('原会话已变化，请重新预览后切换');
     store.account(targetAccountId);
@@ -593,11 +711,18 @@ function registerHandlers() {
   register('settings:background-data', async () => { const file=store.state.settings.background; if(!file)return ''; try { const ext=path.extname(file); return `data:image/${['.jpg','.jpeg'].includes(ext)?'jpeg':ext.slice(1)};base64,${(await fs.readFile(file)).toString('base64')}`; } catch { return ''; } });
   register('system:info', async (options={}) => {
     const detected=process.platform==='win32'?await windowsCli.detect(store.state.settings.claudePath,{refresh:!!options?.refreshCli}):null;
-    return {version:app.getVersion(),tools:agentTools,plannedTools,platform:process.platform,arch:process.arch,claude:detected?detected.path:await executable().catch(()=>''),cliDetection:detected,dataRoot,profiles:await profileDiscovery.discover(),releaseChannel:require('../package.json').releaseChannel||'unsigned-beta'};
+    return {version:app.getVersion(),tools:agentTools,platform:process.platform,arch:process.arch,claude:detected?detected.path:await executable().catch(()=>''),cliDetection:detected,dataRoot,profiles:await profileDiscovery.discover(),releaseChannel:require('../package.json').releaseChannel||'unsigned'};
   });
   register('setup:cli',async()=>{const pick=await dialog.showOpenDialog(win,{title:'选择 Claude CLI 可执行文件',properties:['openFile','showHiddenFiles']});if(pick.canceled)return null;const file=process.platform==='win32'?path.resolve(pick.filePaths[0]):await fs.realpath(pick.filePaths[0]);if(process.platform==='win32'){if(!/\.exe$/i.test(file))throw new Error('请选择 Claude 程序，不支持选择 .ps1/.cmd/.bat 启动脚本');const found=await windowsCli.detect(file,{refresh:true});if(found.path.toLowerCase()!==file.toLowerCase())throw new Error('所选程序未通过运行检查，请点击重新检测以自动查找');}await fs.access(file,1);if(!(await fs.stat(file)).isFile())throw new Error('请选择可执行文件');await store.update(s=>{s.settings.claudePath=file;});pushState();return file;});
   register('setup:finish',async()=>{await store.update(s=>{s.onboarding={completedAt:Date.now()};});pushState();});
-  register('updates:check',()=>updates.check(app.getVersion()));
+  register('agents:list',()=>agentList());
+  register('agents:scan',agentId=>scanAgent(agentId));
+  register('agents:install',agentId=>installAgent(agentId));
+  register('updates:state',()=>updater.state());
+  register('updates:check',()=>updater.check());
+  register('updates:download',()=>updater.download());
+  register('updates:cancel',()=>updater.cancel());
+  register('updates:install',()=>{if(updater.state().phase!=='ready')throw new Error('更新尚未准备好');pendingUpdate=true;app.quit();});
   register('data:backup',async()=>{await draftWrites.flush();await store.queue;const dir=await backupBeforeUpgrade(dataRoot,'manual-'+Date.now());return dir;});
   register('data:show-backups',async()=>{const dir=path.join(dataRoot,'backups.noindex');await fs.mkdir(dir,{recursive:true,mode:0o700});const error=await shell.openPath(dir);if(error)throw new Error('无法打开备份目录，请通过系统文件管理器访问应用数据目录');});
   register('external:open', url => { const parsed=new URL(url); if(!['https:','http:'].includes(parsed.protocol))throw new Error('不支持的链接'); return shell.openExternal(parsed.href); });
@@ -605,7 +730,7 @@ function registerHandlers() {
 
 async function pollTelemetry(sessionIds) {
   const active=new Set(['running','busy','idle','starting','external']);
-  const records=store.state.sessions.filter(r=>r.kind==='claude'&&(sessionIds?sessionIds.includes(r.id):active.has(r.status)));
+  const records=store.state.sessions.filter(r=>(r.kind==='claude'||r.kind==='agent')&&(sessionIds?sessionIds.includes(r.id):active.has(r.status)));
   const pending=(await Promise.all(records.flatMap(record=>['event','usage'].map(async type=>{
     try{const data=JSON.parse(await fs.readFile(path.join(telemetryDir,record.id+'-'+type+'.json'),'utf8'));return data.time>(record[type+'Time']||0)?{id:record.id,type,data}:null;}catch{return null;}
   })))).filter(Boolean);
@@ -672,6 +797,9 @@ app.whenReady().then(async()=> {
     setInterval(()=>{void expireDeleted().catch(()=>{});},60000).unref();
     Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'WbSpace',submenu:[{role:'about'},{type:'separator'},{label:'退出 WbSpace',accelerator:'CmdOrCtrl+Q',click:()=>app.quit()}]},{label:'编辑',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{label:'复制',accelerator:process.platform==='win32'?'Ctrl+Shift+C':'CmdOrCtrl+C',click:()=>notify('clipboard:copy-request')},{role:'paste'},{role:'selectAll'}]},{role:'viewMenu'},{role:'windowMenu'}]));
     await createWindow();
+    for(const a of store.state.accounts)if(['codex-cli','opencode'].includes(a.agentToolId)&&!a.connection&&a.status==='valid')void checkAccount(a.id).catch(()=>{});
+    const lastUpdate=await updateInstall.consumeResult(updateDir);
+    if(lastUpdate?.ok===false)void dialog.showMessageBox(win,{type:'warning',message:'上次更新没有完成',detail:'当前仍是旧版本，数据未受影响。'+(lastUpdate.reason==='permission'?'应用没有权限替换自身，请到系统设置允许，或从下载页手动安装。':'可在设置中重试，或从下载页手动安装。')});
     let polling=false;
     setInterval(async()=>{if(polling)return;polling=true;try{await pollTelemetry();}finally{polling=false;}},2000).unref();
   }catch(e){dialog.showErrorBox('启动失败',e.message);quitting=true;app.quit();}
@@ -685,8 +813,9 @@ app.on('before-quit',async e=> {
   try{await new Promise(resolve=>setImmediate(resolve));await draftWrites.flush();await store.queue;}catch(error){checkingQuit=false;dialog.showErrorBox('草稿未保存',error.message);return;}
   const active=store.state.sessions.some(s=>terminals.has(s.id)&&['running','busy','idle','starting'].includes(s.status));
   const drafts=Object.values(store.state.drafts).some(d=>d.text!==d.baseText);
-  if(active||drafts){ const choice=dialog.showMessageBoxSync(win,{type:'question',message:'退出 WbSpace？',detail:(active?'内置终端将被结束。\n':'')+(drafts?'未保存内容将保留为本地恢复草稿，不会写入原文件。':''),buttons:['取消','退出并保留草稿'],defaultId:0,cancelId:0}); if(choice!==1){checkingQuit=false;return;} }
+  if(active||drafts){ const choice=dialog.showMessageBoxSync(win,{type:'question',message:pendingUpdate?'重启并更新 WbSpace？':'退出 WbSpace？',detail:(active?'内置终端将被结束，更新后可在会话列表恢复。\n':'')+(drafts?'未保存内容将保留为本地恢复草稿，不会写入原文件。':''),buttons:['取消',pendingUpdate?'更新并重启':'退出并保留草稿'],defaultId:0,cancelId:0}); if(choice!==1){checkingQuit=false;pendingUpdate=false;return;} }
   try{await draftWrites.flush();}catch(error){checkingQuit=false;dialog.showErrorBox('草稿未保存',error.message);return;}
+  if(pendingUpdate){try{await updateInstall.launchHelper({platform:process.platform,target:updateTarget().target,artifact:updater.artifact(),dir:updateDir,version:updater.state().latest});}catch(error){checkingQuit=false;pendingUpdate=false;dialog.showErrorBox('无法启动更新',error.message);return;}}
   quitting=true;
   for(const t of terminals.values())if(!t.closed)try{t.proc.kill();}catch{}
   app.quit();

@@ -2,21 +2,23 @@
 
 以本地工作空间和内置终端为中心的 macOS / Windows 桌面应用，管理 Agent CLI 的账号、会话、用量与项目文件。
 
-当前版本 **0.4.1（未公证/未发行者签名内测）** 接入 Claude Code，支持自动隔离的官方订阅账号，以及自定义供应商、密钥和模型配置。Codex CLI、Gemini CLI 等仍在接入规划中，界面不会将它们标为已连接。
+当前版本 **1.0.0 正式版（安装包尚未签名/公证）** 接入 Claude Code，支持自动隔离的官方订阅账号，以及自定义供应商、密钥和模型配置。自定义供应商还可通过 Codex CLI、OpenCode 启动，由所选 API 协议决定可用的 Agent。
 
 ![账号与连接](docs/screenshots/account-cards-dark.png)
 
 截图使用隔离演示数据，额度不是用户实时余额。
 
-## 安装内测版
+## 安装
 
-[Windows x64 安装版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v0.4.1-beta.18/WbSpace-0.4.1-windows-x64-setup.exe) · [Windows x64 ZIP 解压版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v0.4.1-beta.18/WbSpace-0.4.1-windows-x64-portable.zip) · [macOS Apple Silicon DMG](https://github.com/SneyRio/Terminal-Workbench/releases/download/v0.4.1-beta.18/WbSpace-0.4.1-mac-arm64-unsigned-beta.dmg)
+[Windows x64 安装版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.0.0/WbSpace-1.0.0-windows-x64-setup.exe) · [Windows x64 ZIP 解压版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.0.0/WbSpace-1.0.0-windows-x64-portable.zip) · [macOS Apple Silicon DMG](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.0.0/WbSpace-1.0.0-mac-arm64-unsigned.dmg)
 
-[Release、校验值及安装说明](https://github.com/SneyRio/Terminal-Workbench/releases/tag/v0.4.1-beta.18)
+[Release、校验值及安装说明](https://github.com/SneyRio/Terminal-Workbench/releases/tag/v1.0.0)
 
-Windows 和 macOS 0.4.1 内测包均已公开发布并核对下载及校验值。Windows x64 的 exe / ZIP 内测包见 [Releases](https://github.com/SneyRio/Terminal-Workbench/releases) 和 [安装说明](docs/windows-beta.md)。DMG 拖入 Applications；首次打开若因未验证开发者而拦截，可在系统设置的隐私与安全性中对该应用确认“仍要打开”，受管电脑可能禁止放行。包仅有完整临时签名，没有 Developer ID 和 Apple 公证。
+这是正式版，但安装包尚未签名/公证：macOS 只有临时签名，没有 Developer ID 和 Apple 公证；Windows 没有 Authenticode 证书。首次打开可能被系统拦截。macOS 需在系统设置的隐私与安全性中确认“仍要打开”，Windows 可能提示未知发布者，受管电脑可能禁止放行。请只从本仓库 Release 下载并核对 SHA256SUMS.txt。
 
-用户需自行安装 Claude CLI；应用自动检测，无需填写程序路径。Windows 支持原生安装、npm 原生依赖、WinGet、Scoop 等常见位置，并校验程序可运行；旧 npm 脚本失效时自动寻找其他安装。确实缺失时提供安装指引，安装后重新检测即可。再添加账号与工作空间。详见 [安装、升级及本机恢复说明](docs/install-beta.md)。项目源码推送不代表 GitHub Release 已发布。
+**一键更新**：设置 → 检查更新 → 下载并更新 → 重启并更新。下载期间不影响会话，安装包通过 SHA-256 校验后才可安装，只有点击重启时才退出应用，配置和会话保留。Windows 解压版和从磁盘映像直接运行的副本无法替换自身，会转到下载页。0.4.x 及更早版本需手动安装一次 1.0.0，之后才能一键更新。
+
+用户需自行安装 Claude CLI；应用自动检测，无需填写程序路径。Windows 支持原生安装、npm 原生依赖、WinGet、Scoop 等常见位置，并校验程序可运行；旧 npm 脚本失效时自动寻找其他安装。确实缺失时提供安装指引，安装后重新检测即可。再添加账号与工作空间。详见 [安装、升级及本机恢复说明](docs/install.md)。项目源码推送不代表 GitHub Release 已发布。
 
 ## 主要功能
 
@@ -25,14 +27,14 @@ Windows 和 macOS 0.4.1 内测包均已公开发布并核对下载及校验值�
 - **账号卡片**：搜索、工具筛选、身份与认证状态、五小时及周剩余额度、重置倒计时、连接详情和快捷新建会话。
 - **连接管理**：引用本机已配置的启动入口、自动生成官方独立账号目录和启动命令，或添加自定义供应商与多个模型。自定义模型不套用订阅额度条，底部状态栏与内置 HUD 回退也不显示订阅额度占位。
 - **会话连续性**：精确会话 ID 恢复、同工具账号切换、检查点和明确标识的上下文交接。目标就绪后移除旧入口，失败保留原记录。
-- **自动标题**：从首条有效任务摘取短标题，不额外调用模型；手动命名优先，恢复及切换保留标题。
+- **自动标题**：从首条有效任务摘取短标题，不额外调用模型；手动命名优先，恢复及切换保留标题。会话显示为 `[agent|账号别名]标题`，鼠标停留可看完整名称。
 - **最近删除**：按工作空间分组保留手动删除的会话 7 天，支持恢复和永久删除。自动替换不进入回收清单。
 - **文件与 Git**：多项目文件树着色、文本编辑、Markdown/JSON/CSV/图片预览、冲突保护、上下拖动和内容放大、图形化 Git 差异；文件与文件夹可确认后移入系统回收站，保护未保存内容与项目根目录。
 - **外观**：浅灰、黑夜、跟随系统、本地背景图片及透明度，内置 JetBrains Mono 字体。
 
 ## 运行环境
 
-macOS Apple Silicon，或 Windows x64；开发需要 Node.js 22.12+、对应平台的 C++ 编译工具和自行安装的 Claude Code。Windows 原生 CI 构建、桌面与安装卸载验收已通过，发布状态见 [Windows 内测说明](docs/windows-beta.md)。Linux 尚未适配。
+macOS Apple Silicon，或 Windows x64；开发需要 Node.js 22.12+、对应平台的 C++ 编译工具和自行安装的 Claude Code。Windows 原生 CI 构建、桌面与安装卸载验收已通过，发布状态见 [Windows 说明](docs/windows.md)。Linux 尚未适配。
 
 ```sh
 npm ci
@@ -52,7 +54,7 @@ npm start
 npm run package:mac
 ```
 
-产物位于 `release/builds.noindex/WbSpace-darwin-arm64/WbSpace.app`。尚未提供 Apple Developer ID 签名和公证。
+产物位于 `release/builds.noindex/WbSpace-darwin-arm64/WbSpace.app`。安装包尚未签名/公证（无 Apple Developer ID）。
 
 如果 Electron 尚未下载或原生终端模块需要重建：
 
@@ -64,14 +66,26 @@ npm run rebuild:native
 ## 开始使用
 
 1. 打开“账号与连接”，添加连接。可选本机入口、独立官方配置、自定义供应商。官方账号自动生成独立目录和可复制的启动命令；点击“创建并登录”进入官方 CLI 授权。
-2. 创建工作空间并选择本地项目，第一个项目作为主目录；为该工作空间选择默认连接。
-3. 从工作空间新建 CLI / Shell，或从账号卡片选择工作空间后启动指定账号的会话。卡片启动不会改写其他会话或工作空间默认身份。
-4. 从卡片的更多菜单查看详情、重命名、检查状态、切换当前会话账号或移除引用。模型服务页可新增和编辑自建连接的供应商名称、Anthropic 兼容地址、认证方式、密钥、模型列表与默认模型；原有脚本引用继续由原配置管理。
+2. 创建工作空间并选择本地项目，第一个项目作为主目录；为该工作空间选择默认 Agent 工具和默认账号。
+3. 从工作空间新建 CLI / Shell：“新建会话”使用工作空间默认值，下拉菜单可按 Agent 选择其他账号，不改变默认值；也可从账号卡片选择工作空间后启动指定账号的会话。卡片启动不会改写其他会话或工作空间默认身份。
+4. 从卡片的更多菜单查看详情、重命名、检查状态、切换当前会话账号或移除连接。移除 WbSpace 创建的账号会退出登录并永久删除其本地目录（凭证、加密密钥、该账号的 CLI 会话历史），引用的本机已有配置不受影响。模型服务页可新增和编辑自建连接的供应商名称、Anthropic 兼容地址、认证方式、密钥、模型列表与默认模型；原有脚本引用继续由原配置管理。
 5. 在右侧编辑和预览文件。`Cmd+S` 保存，`Cmd+Shift+S` 保存文件区全部修改；文件快速打开遵循系统按文件类型的默认关联。
 
 网页登录始终交给系统默认浏览器；不会选择特定浏览器或使用内置网页登录。
 
-自定义服务当前需兼容 Anthropic Messages 协议，不直接接入普通 OpenAI 接口。密钥经 Electron safeStorage 使用系统安全存储加密后保存为本机加密文件（macOS 权限 0600），不进入普通状态或项目配置。编辑时密钥留空表示保留，修改在新启动/恢复的会话生效；检查配置只确认本地可用性，不发送推理请求。不同自定义服务间切换默认使用可预览的上下文交接。官方独立启动命令位于应用数据目录的 `bin/`，可在详情中复制完整路径；不会覆盖 `~/.local/bin` 的已有入口。
+自定义供应商需选择 API 协议，Agent 工具按协议过滤，不做协议转换：
+
+| API 协议 | 可选 Agent |
+|---|---|
+| Anthropic Messages（`/v1/messages`） | Claude Code、OpenCode |
+| OpenAI Chat Completions（`/chat/completions`） | OpenCode |
+| OpenAI Responses（`/responses`） | Codex CLI、OpenCode |
+
+Codex、OpenCode、Qoder 也可在“独立官方配置”用官方账号登录（Qoder 只支持这种方式）：每个账号有独立配置目录，互不影响，也不影响 `~/.codex`、`~/.qoder` 等已有登录。Codex 使用 ChatGPT 账号，OpenCode 由你在其登录界面选择要连接的供应商账号。不支持 Gemini CLI：Google 已于 2026-06-18 停止个人、AI Pro 和 Ultra 账号使用它。这些 Agent 只在内置终端启动：不能切换账号，恢复时开启新进程，附加项目不会传入。
+
+官方账号的用量：Codex 显示 5 小时和每周额度（来自官方 app-server，不发模型请求）；Qoder 显示 Credits 剩余（来自状态栏数据，开始一次会话后更新）；OpenCode 没有订阅额度接口，只显示 `opencode stats` 的本地累计费用和 Token。
+
+密钥经 Electron safeStorage 使用系统安全存储加密后保存为本机加密文件（macOS 权限 0600），不进入普通状态或项目配置。编辑时密钥留空表示保留，修改在新启动/恢复的会话生效；检查配置只确认本地可用性，不发送推理请求。不同自定义服务间切换默认使用可预览的上下文交接。官方独立启动命令位于应用数据目录的 `bin/`，可在详情中复制完整路径；不会覆盖 `~/.local/bin` 的已有入口。
 
 ## 数据与恢复边界
 
@@ -98,6 +112,6 @@ npm run test:e2e
 - [实现和测试记录](docs/implementation-report.md)
 - [视觉验收](design-qa.md)
 
-新版本启动前会生成本机配置与加密密钥快照，保留最近五份；设置中可备份、查看备份和手动检查 GitHub Release。重复启动激活已有实例。当前更新需手动替换，不后台安装。
+新版本启动前会生成本机配置与加密密钥快照，保留最近五份；设置中可备份、查看备份和一键更新。重复启动激活已有实例。更新只由用户点击触发，不后台安装。
 
 项目不会提交本机账号状态、凭证、测试数据、`node_modules` 或安装包。字体原始文件和 SIL OFL 1.1 许可证随源码及应用分发，见 [字体来源与许可](public/licenses/jetbrains-mono/source.json)。

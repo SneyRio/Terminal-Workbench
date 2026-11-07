@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "packaged": true,
+  "checks": [
+    "all four agents can be chosen for official sign-in, and choosing one moves to the official account flow",
+    "signed-out accounts are created without provider settings and ask for sign-in before starting",
+    "each official login runs its own command in an isolated directory with inherited credentials removed, is detected, and sessions then start",
+    "official usage is collected from the Codex app server and OpenCode stats",
+    "cards show Codex quota bars and OpenCode local totals",
+    "account identity comes from each CLI and no credential reaches app state",
+    "an account left over from the removed Gemini CLI stays visible, cannot start and can be removed",
+    "removing a referenced local profile leaves its directory untouched",
+    "removing an account created here signs out and deletes its local directory with credentials"
+  ],
+  "modelPrompts": 0
+}

@@ -24,7 +24,7 @@ class Store {
   async load() {
     try { const loaded=JSON.parse(await fs.readFile(this.file,'utf8'));this.state={...defaults(),...loaded,settings:{...defaults().settings,...loaded.settings}};if(loaded.settings?.terminalFontVersion!==1){this.state.settings.fontFamily='JetBrains Mono';this.state.settings.terminalFontVersion=1;} }
     catch (e) { if (e.code !== 'ENOENT') throw new Error('本地状态文件损坏，请保留 state.json 并恢复备份：' + e.message); }
-    pruneDeleted(this.state);migrateEmbedded(this.state);ensureWorkspaceOrder(this.state);for(const account of this.state.accounts)account.agentToolId||='claude-code';
+    pruneDeleted(this.state);migrateEmbedded(this.state);ensureWorkspaceOrder(this.state);for(const account of this.state.accounts){account.agentToolId||='claude-code';if(account.connection&&!account.connection.protocol)account.connection.protocol=require('./agent-catalog.cjs').protocolOf(account.connection);}
     return this.state;
   }
   async update(fn) {

@@ -25,6 +25,7 @@ try{
  await invoke('settings:save',{claudePath:fixture});
  const a=await invoke('account:add','测试账号 A'),b=await invoke('account:add','测试账号 B');
  const workspace=await invoke('workspace:save',{name:'会话管理回归',projects:[{path:project}],backend:'embedded',accountId:a.id});
+ await page.evaluate(()=>window.accountor.invoke('setup:finish'));await expect(page.getByRole('dialog',{name:'首次启动指南'})).toHaveCount(0);
  await page.locator('.workspace-nav').click();
  const trigger=page.getByRole('button',{name:'会话选项',exact:true});
  await trigger.click();await expect(trigger).toHaveAttribute('aria-expanded','true');await expect(trigger).toHaveClass(/expanded/);

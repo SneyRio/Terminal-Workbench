@@ -43,7 +43,7 @@ try{
  checks.push('native scrollback wheel and draggable scrollbar both navigate long terminal output');
  await invoke('terminal:input',session.id,'OSC');await expect.poll(()=>app.evaluate(({clipboard})=>clipboard.readText())).toBe('CLI_COPY_中文');checks.push('CLI OSC52 clipboard output supports UTF-8 without exposing clipboard reads');
  await invoke('settings:save',{claudePath:fixture});const account=await invoke('account:add','全屏复制测试');const cli=await invoke('terminal:start',{workspaceId:session.workspaceId,kind:'claude',accountId:account.id});
- await page.locator('[data-session-id="'+cli.id+'"]').getByRole('button',{name:cli.title,exact:true}).click();await invoke('terminal:input',cli.id,'ALT');await expect(page.locator('.terminal-slot.visible .terminal-host')).toHaveAttribute('data-buffer-mode','alternate');
+ await page.locator('[data-session-id="'+cli.id+'"]').getByRole('button',{name:cli.title}).first().click();await invoke('terminal:input',cli.id,'ALT');await expect(page.locator('.terminal-slot.visible .terminal-host')).toHaveAttribute('data-buffer-mode','alternate');
  await app.evaluate(async({clipboard})=>clipboard.writeText('BEFORE_ALT_COPY'));await page.locator('.terminal-slot.visible .xterm-helper-textarea').focus();await page.keyboard.press('Meta+c');await expect.poll(()=>app.evaluate(({clipboard})=>clipboard.readText())).toBe('CLI_COPY_中文');checks.push('Cmd-C in alternate screen routes CLI copy action through OSC52');
  // Verify the persisted settings are not overwritten by later control changes.
  const file=path.join(dataRoot,'state.json');const stored=JSON.parse(await fs.readFile(file,'utf8'));expect(stored.settings.fontFamily).toBe('Monaco');expect(stored.settings.lineHeight).toBe(1.6);
