@@ -39,4 +39,49 @@ function hudShell(env=process.env,platform=process.platform,exists=fs.existsSync
  const base=value(env,'ProgramFiles')||'C:\\Program Files';const bash=[path.win32.join(base,'Git','bin','bash.exe'),value(env,'LOCALAPPDATA')&&path.win32.join(value(env,'LOCALAPPDATA'),'Programs','Git','bin','bash.exe')].filter(Boolean).find(exists);
  if(bash)return {file:bash,args:['-c'],detached:false};return {file:defaultShell(env,'win32',exists),args:['-NoLogo','-NoProfile','-NonInteractive','-Command'],detached:false,powershell:true};
 }
-module.exports={value,searchPath,executableCandidates,defaultShell,shellArgs,discoveredShellArgs,browserSettings,quotePosix,quotePowerShell,powershellCommand,hookSettings,hudShell};
+// npm, pnpm and yarn install CLIs on Windows as .cmd shims; cmd.exe cannot pass quotes, % or line breaks through them.
+// The shim's target is read instead, so the real program starts with an argument array: a .exe directly, a script with node.exe.
+// Anything unrecognised returns null and the caller falls back to cmd.exe.
+async function resolveCmdShim(file,env=process.env,{io=fs.promises,depth=0}={}){
+ const p=path.win32;
+ if(depth>2||!/\.(cmd|bat)$/i.test(file))return null;
+ let text;try{const stat=await io.stat(file);if(!stat.isFile()||stat.size>64*1024)return null;text=await io.readFile(file,'utf8');}catch{return null;}
+ const dir=p.dirname(file),exists=f=>io.stat(f).then(s=>s.isFile(),()=>false);
+ const expand=t=>p.normalize(t.replace(/%~dp0%?|%dp0%/gi,dir+'\\'));
+ for(const line of text.split(/\r?\n/).filter(l=>l.includes('%*'))){
+  const tokens=[...line.matchAll(/"([^"]+)"/g)].map(m=>m[1]).filter(t=>/%~?dp0/i.test(t));
+  if(!tokens.length)continue;
+  const target=expand(tokens.at(-1));
+  if(!await exists(target))return null;
+  if(/\.exe$/i.test(target))return {file:target,args:[]};
+  if(/\.(cmd|bat)$/i.test(target))return resolveCmdShim(target,env,{io,depth:depth+1});
+  if(!/\.[cm]?js$/i.test(target))return null;
+  const nodes=[p.join(dir,'node.exe'),...value(env,'PATH').split(';').map(d=>d.trim().replace(/^"|"$/g,'')).filter(d=>p.isAbsolute(d)).map(d=>p.join(d,'node.exe'))];
+  for(const node of nodes)if(await exists(node))return {file:node,args:[target]};
+  return null;
+ }
+ return null;
+}
+// Standard Windows argument quoting (the rules CommandLineToArgvW, the MSVC runtime, Rust and Node use to split a command line).
+// node-pty's own quoting skips arguments that already start and end with a quote, which splits a prompt such as "a b".
+function quoteWindowsArg(arg){
+ const a=String(arg);
+ if(a==='')return '""';
+ if(!/[\s"]/.test(a))return a;
+ let out='"',slashes=0;
+ for(const ch of a){
+  if(ch==='\\'){slashes++;continue;}
+  out+=ch==='"'?'\\'.repeat(slashes*2+1)+'"':'\\'.repeat(slashes)+ch;slashes=0;
+ }
+ return out+'\\'.repeat(slashes*2)+'"';
+}
+const windowsCommandLine=args=>args.map(quoteWindowsArg).join(' ');
+// One command line for `cmd.exe /d /s /c` running a .cmd/.bat shim. Inside quotes cmd leaves & | < > ( ) alone,
+// but nothing can carry a double quote, % (expanded even inside quotes), ^ or a line break through it.
+function cmdShimCommand(cli,args){
+ if(/["%^\r\n]/.test(cli)||args.some(a=>/["%^\r\n]/.test(a)))throw new Error('无效的程序路径或参数');
+ // Backslashes before the closing quote are doubled so the program does not read them as an escaped quote.
+ const quote=a=>a===''||/[\s&|<>()]/.test(a)?'"'+a.replace(/(\\+)$/,'$1$1')+'"':a;
+ return `/d /s /c ""${cli}"${args.map(a=>' '+quote(a)).join('')}"`;
+}
+module.exports={quoteWindowsArg,windowsCommandLine,resolveCmdShim,cmdShimCommand,value,searchPath,executableCandidates,defaultShell,shellArgs,discoveredShellArgs,browserSettings,quotePosix,quotePowerShell,powershellCommand,hookSettings,hudShell};

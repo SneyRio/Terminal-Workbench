@@ -2,7 +2,7 @@
 
 以本地工作空间和内置终端为中心的 macOS / Windows 桌面应用，管理 Agent CLI 的账号、会话、用量与项目文件。
 
-当前版本 **1.1.0 正式版（安装包尚未签名/公证）** 接入 Claude Code，支持自动隔离的官方订阅账号，以及自定义供应商、密钥和模型配置。自定义供应商还可通过 Codex CLI、OpenCode 启动，由所选 API 协议决定可用的 Agent。
+当前版本 **1.2.0 正式版（安装包尚未签名/公证）** 接入 Claude Code，支持自动隔离的官方订阅账号，以及自定义供应商、密钥和模型配置。自定义供应商还可通过 Codex CLI、OpenCode 启动，由所选 API 协议决定可用的 Agent。
 
 ![账号与连接](docs/screenshots/account-cards-dark.png)
 
@@ -10,13 +10,13 @@
 
 ## 安装
 
-[Windows x64 安装版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.1.0/WbSpace-1.1.0-windows-x64-setup.exe) · [Windows x64 ZIP 解压版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.1.0/WbSpace-1.1.0-windows-x64-portable.zip) · [macOS Apple Silicon DMG](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.1.0/WbSpace-1.1.0-mac-arm64-unsigned.dmg)
+[Windows x64 安装版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.2.0/WbSpace-1.2.0-windows-x64-setup.exe) · [Windows x64 ZIP 解压版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.2.0/WbSpace-1.2.0-windows-x64-portable.zip) · [macOS Apple Silicon DMG](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.2.0/WbSpace-1.2.0-mac-arm64-unsigned.dmg)
 
-[Release、校验值及安装说明](https://github.com/SneyRio/Terminal-Workbench/releases/tag/v1.1.0)
+[Release、校验值及安装说明](https://github.com/SneyRio/Terminal-Workbench/releases/tag/v1.2.0)
 
 这是正式版，但安装包尚未签名/公证：macOS 只有临时签名，没有 Developer ID 和 Apple 公证；Windows 没有 Authenticode 证书。首次打开可能被系统拦截。macOS 需在系统设置的隐私与安全性中确认“仍要打开”，Windows 可能提示未知发布者，受管电脑可能禁止放行。请只从本仓库 Release 下载并核对 SHA256SUMS.txt。
 
-**一键更新**：设置 → 检查更新 → 下载并更新 → 重启并更新。下载期间不影响会话，安装包通过 SHA-256 校验后才可安装，只有点击重启时才退出应用，配置和会话保留。Windows 解压版和从磁盘映像直接运行的副本无法替换自身，会转到下载页。默认走系统代理；下载慢时可在设置里填写“更新代理”（如 `http://127.0.0.1:7897`），它只用于检查和下载更新。0.4.x 及更早版本需手动安装一次 1.1.0，之后才能一键更新。
+**一键更新**：设置 → 检查更新 → 下载并更新 → 重启并更新。下载期间不影响会话，安装包通过 SHA-256 校验后才可安装，只有点击重启时才退出应用，配置和会话保留。Windows 解压版和从磁盘映像直接运行的副本无法替换自身，会转到下载页。默认走系统代理；下载慢时可在设置里填写“更新代理”（如 `http://127.0.0.1:7897`），它只用于检查和下载更新。0.4.x 及更早版本需手动安装一次 1.2.0，之后才能一键更新。
 
 用户需自行安装 Claude CLI；应用自动检测，无需填写程序路径。Windows 支持原生安装、npm 原生依赖、WinGet、Scoop 等常见位置，并校验程序可运行；旧 npm 脚本失效时自动寻找其他安装。确实缺失时提供安装指引，安装后重新检测即可。再添加账号与工作空间。详见 [安装、升级及本机恢复说明](docs/install.md)。项目源码推送不代表 GitHub Release 已发布。
 
@@ -30,6 +30,7 @@
 - **会话连续性**：精确会话 ID 恢复、检查点和明确标识的上下文交接；会话可切换到任意 Agent 的任意账号继续（Claude 之间可原生恢复，其余通过交接资料）。目标就绪后移除旧入口，失败保留原记录。
 - **自动标题**：从首条有效任务摘取短标题，不额外调用模型；手动命名优先，恢复及切换保留标题。会话显示为 `[agent]标题`（悬停提示里同样不含账号名，账号见底部状态栏），鼠标停留可看完整名称。
 - **定时任务**：按间隔、每天、每周或 cron 表达式，用指定账号在工作空间里无人值守地运行提示词，每次运行留下可恢复的会话和运行记录。权限分只读（默认，在项目目录运行）、可修改项目文件、完全权限；后两者默认在独立 Git 工作树和 `wbspace/` 新分支中运行，不影响当前工作区。上一次未结束不重复运行，有超时，额度接近用尽时跳过，结果发系统通知。仅在应用运行时执行，错过的可在启动后补跑一次。
+- **系统提示词**：在“设置 → 系统提示词”中添加多条自定义提示词，可单独启用、排序，并选择对哪些 Agent 生效。内容追加在各 Agent 自带的系统提示词之后，不替换原有内容：Claude Code 用 `--append-system-prompt-file`，Codex CLI 用 `-c developer_instructions`（Windows 上遇到认不出的 `.cmd` 启动脚本时，改为写入该账号 `CODEX_HOME` 下带标记的 `AGENTS.md`），Qoder CLI 用 `--append-system-prompt=`，OpenCode 用配置项 `instructions`。保存后对新开、恢复和定时任务的会话生效。
 - **最近删除**：按工作空间分组保留手动删除的会话 7 天，支持恢复和永久删除。自动替换不进入回收清单。
 - **文件与 Git**：多项目文件树着色、文本编辑、Markdown/JSON/CSV/图片预览、冲突保护、上下拖动和内容放大、图形化 Git 差异，Git 面板可切换本地和远程分支（工作区有变更或有会话运行时先确认，冲突时拒绝且不改动），可逐个或按组暂存、提交暂存区，推送（无上游时设到 origin）和仅快进的拉取（分叉时拒绝，需在终端处理），认证使用本机 Git 凭据，底部状态栏显示当前会话所在分支；文件与文件夹可确认后移入系统回收站，保护未保存内容与项目根目录。
 - **外观**：浅灰、黑夜、跟随系统、本地背景图片及透明度，内置 JetBrains Mono 字体。

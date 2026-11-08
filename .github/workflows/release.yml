@@ -37,10 +37,12 @@ jobs:
         with:
           path: node_modules/node-pty/build
           key: windows-2022-x64-electron-45.2.2-nodepty-1.1.0-${{ hashFiles('package-lock.json') }}
-      - run: node --test tests/updates.test.cjs tests/agent-catalog.test.cjs tests/schedules.test.cjs tests/cli-discovery.test.cjs tests/file-trash.test.cjs tests/platform.test.cjs tests/release-readiness.test.cjs tests/performance.test.cjs tests/session-history.test.cjs tests/session-titles.test.cjs
+      - run: node --test tests/updates.test.cjs tests/agent-catalog.test.cjs tests/schedules.test.cjs tests/cli-discovery.test.cjs tests/file-trash.test.cjs tests/platform.test.cjs tests/system-prompts.test.cjs tests/release-readiness.test.cjs tests/performance.test.cjs tests/session-history.test.cjs tests/session-titles.test.cjs
       - run: npm run package:win
       - run: ./scripts/build-windows-fixture.ps1
       - run: npm run test:windows
+        timeout-minutes: 5
+      - run: node scripts/windows-agent-prompt-smoke.mjs
         timeout-minutes: 5
       - run: node scripts/release-windows.mjs
       - run: node scripts/windows-installer-smoke.mjs
@@ -74,7 +76,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: node node_modules/electron/install.js
       - run: npm run rebuild:native
-      - run: node --test tests/updates.test.cjs tests/agent-catalog.test.cjs tests/schedules.test.cjs tests/release-readiness.test.cjs
+      - run: node --test tests/updates.test.cjs tests/agent-catalog.test.cjs tests/schedules.test.cjs tests/system-prompts.test.cjs tests/release-readiness.test.cjs
       - run: npm run release:mac
       - run: mkdir -p test-results && node scripts/release-readiness-regression.mjs
         timeout-minutes: 5
@@ -144,7 +146,7 @@ jobs:
           test -f "WbSpace-$VERSION-mac-arm64-unsigned.zip"
           python3 - <<'PY'
           import json
-          for file in ['../validation/windows-smoke.json', '../validation/windows-installer.json']:
+          for file in ['../validation/windows-smoke.json', '../validation/windows-installer.json', '../validation/windows-agent-prompts.json']:
               data=json.load(open(file))
               assert data['passed'] and data['platform']=='win32', file
           PY
@@ -152,5 +154,5 @@ jobs:
         if: steps.existing.outputs.skip == 'false'
         run: |
           # Stay a draft until every file is attached, so the update check never sees a partial release.
-          gh release create "$TAG" bundle/* validation/windows-smoke.json validation/windows-installer.json --target "$GITHUB_SHA" --title "WbSpace $VERSION" --notes-file docs/release-notes.md --draft
+          gh release create "$TAG" bundle/* validation/windows-smoke.json validation/windows-installer.json validation/windows-agent-prompts.json --target "$GITHUB_SHA" --title "WbSpace $VERSION" --notes-file docs/release-notes.md --draft
           gh release edit "$TAG" --draft=false --latest

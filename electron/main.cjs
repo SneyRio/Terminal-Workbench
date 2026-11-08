@@ -15,6 +15,7 @@ const agentInstall=require('./agent-install.cjs');
 const agentUsage=require('./agent-usage.cjs');
 const agentTranscripts=require('./agent-transcripts.cjs');
 const schedules=require('./schedules.cjs');
+const systemPrompts=require('./system-prompts.cjs');
 const {inspectLegacy,retireLegacy}=require('./app-migration.cjs');
 const {taskText,defaultTitle,migrateTitle,applyTaskTitle,copyTitle,transcriptTitle}=require('./session-titles.cjs');
 const {pruneDeleted,findDeleted,forgetDeleted,archiveSession,replaceSession,deduplicateRecovered}=require('./session-history.cjs');
@@ -106,6 +107,12 @@ async function claudeScanState(){
   catch{return known?.installed?null:known||null;}
 }
 async function agentList(){const claude=await claudeScanState();return {protocols:agentCatalog.protocols.map(({id,label,placeholder,hint})=>({id,label,placeholder,hint})),agents:agentCatalog.agents.map(a=>({id:a.id,name:a.name,protocols:a.protocols,authTypes:a.authTypes,login:!!a.login,unavailable:a.unavailable||'',docs:a.docs,command:agentInstall.installCommand(a).text,scan:a.id==='claude-code'?claude:store.state.agentInstalls?.[a.id]||null,install:agentInstalling.get(a.id)||null}))};}
+// How to run an agent CLI for a one-off command: a Windows npm shim is bypassed when possible, otherwise cmd.exe runs it.
+async function agentCommand(cli,args,env){
+  if(process.platform!=='win32'||/\.exe$/i.test(cli))return [cli,args];
+  const direct=await platformTools.resolveCmdShim(cli,env);
+  return direct?[direct.file,[...direct.args,...args]]:[process.env.ComSpec||'cmd.exe',['/d','/c',cli,...args]];
+}
 async function scanAgent(id){
   const agent=agentCatalog.agent(id);
   let result;
@@ -121,7 +128,7 @@ async function scanAgent(id){
 const usageRefreshed=new Map();
 // Runs in the background so a slow usage service never delays a status check or a session start.
 async function refreshOfficialUsage(account,cli,env,force=false){
-  const reader=account.agentToolId==='codex-cli'?()=>{const shim=process.platform==='win32'&&!/\.exe$/i.test(cli);return agentUsage.readCodexUsage(cli,env,shim?{command:[process.env.ComSpec||'cmd.exe',['/d','/c',cli,'app-server']]}:{});}:account.agentToolId==='opencode'?async()=>{const shim=process.platform==='win32'&&!/\.exe$/i.test(cli);const {stdout}=await exec(shim?(process.env.ComSpec||'cmd.exe'):cli,[...(shim?['/d','/c',cli]:[]),'stats'],{env,windowsHide:true,timeout:20000,maxBuffer:1024*1024});return agentUsage.parseOpencodeStats(stdout);}:null;
+  const reader=account.agentToolId==='codex-cli'?async()=>agentUsage.readCodexUsage(cli,env,{command:await agentCommand(cli,['app-server'],env)}):account.agentToolId==='opencode'?async()=>{const [file,args]=await agentCommand(cli,['stats'],env);const {stdout}=await exec(file,args,{env,windowsHide:true,timeout:20000,maxBuffer:1024*1024});return agentUsage.parseOpencodeStats(stdout);}:null;
   if(!reader)return;
   if(!force&&Date.now()-(usageRefreshed.get(account.id)||0)<30000)return;
   usageRefreshed.set(account.id,Date.now());
@@ -155,8 +162,8 @@ async function signOutManaged(account){
     if(!args)return;
     const cli=claude?await executable():await agentExecutable(account.agentToolId);
     const env=claude?cliEnv(connections.dir(account.id)):(await officialEnv(account,cli)).env;
-    const shim=process.platform==='win32'&&!/\.exe$/i.test(cli);
-    await exec(shim?(process.env.ComSpec||'cmd.exe'):cli,[...(shim?['/d','/c',cli]:[]),...args],{env,windowsHide:true,timeout:15000,maxBuffer:256*1024});
+    const [file,command]=await agentCommand(cli,args,env);
+    await exec(file,command,{env,windowsHide:true,timeout:15000,maxBuffer:256*1024});
   }catch{}
 }
 async function installAgent(id){
@@ -289,8 +296,8 @@ async function checkAccount(accountId) {
   try {
     const account=store.account(accountId);
     if(usesOfficialCli(account)){
-      const tool=account.agentToolId,cli=await agentExecutable(tool),{env}=await officialEnv(account,cli),home=connections.officialHome(accountId,tool),shim=process.platform==='win32'&&!/\.exe$/i.test(cli);
-      const run=async args=>{try{const {stdout,stderr}=await exec(shim?(process.env.ComSpec||'cmd.exe'):cli,[...(shim?['/d','/c',cli]:[]),...args],{env,windowsHide:true,timeout:15000,maxBuffer:256*1024});return {code:0,stdout,stderr};}catch(error){if(typeof error.code!=='number')throw error;return {code:error.code,stdout:error.stdout||'',stderr:error.stderr||''};}};
+      const tool=account.agentToolId,cli=await agentExecutable(tool),{env}=await officialEnv(account,cli),home=connections.officialHome(accountId,tool);
+      const run=async args=>{try{const [file,command]=await agentCommand(cli,args,env);const {stdout,stderr}=await exec(file,command,{env,windowsHide:true,timeout:15000,maxBuffer:256*1024});return {code:0,stdout,stderr};}catch(error){if(typeof error.code!=='number')throw error;return {code:error.code,stdout:error.stdout||'',stderr:error.stderr||''};}};
       const data=await agentCatalog.officialProfile(tool).status(run,home);
       await store.update(s=>{const a=s.accounts.find(a=>a.id===accountId);if(!a)return;const identity=data.loggedIn&&data.email?tool+'|'+data.email.toLowerCase()+'|'+data.org:'';Object.assign(a,{status:data.loggedIn?'valid':'login',email:data.email||data.username||'',authMethod:data.method||'',identity,duplicateOf:identity?s.accounts.find(other=>other.id!==accountId&&other.identity===identity)?.id:undefined,checkedAt:Date.now(),error:''});});
       pushState();
@@ -339,8 +346,7 @@ async function agentRaw(source){
   if(tool==='opencode'){
     const cli=await agentExecutable(tool);
     const env=usesOfficialCli(account)?(await officialEnv(account,cli)).env:{...cliEnv(null),...(await connections.env(account))};delete env.CLAUDE_CONFIG_DIR;
-    const shim=process.platform==='win32'&&!/\.exe$/i.test(cli);
-    const run=args=>exec(shim?(process.env.ComSpec||'cmd.exe'):cli,[...(shim?['/d','/c',cli]:[]),...args],{env,cwd:source.cwd,windowsHide:true,timeout:30000,maxBuffer:64*1024*1024});
+    const run=async args=>{const [file,command]=await agentCommand(cli,args,env);return exec(file,command,{env,cwd:source.cwd,windowsHide:true,timeout:30000,maxBuffer:64*1024*1024});};
     const listed=JSON.parse((await run(['session','list','--format','json'])).stdout||'[]');
     const sessionId=agentTranscripts.pickOpencodeSession(listed,source.cwd,since);if(!sessionId)return '';
     const out=(await run(['export',sessionId])).stdout;return agentTranscripts.opencodeToClaude(JSON.parse(out.slice(out.indexOf('{'))));
@@ -380,6 +386,7 @@ async function startSession(input) {
   if (!cwd || !(await fs.stat(cwd)).isDirectory()) throw new Error('主项目根目录不可用');
   const sessionId = id();
   const metadataPath = path.join(telemetryDir, sessionId + '-event.json');
+  const promptFile=path.join(telemetryDir,sessionId+'-prompt.md');
   const env = {...cliEnv(acct ? accountDir(acct.id) : null),...(acct?await connections.env(acct):{})};
   // Login must use the user's macOS default browser, never an embedded webview or a named browser.
   Object.assign(env,platformTools.browserSettings());
@@ -392,10 +399,12 @@ async function startSession(input) {
   if(kind==='agent'||(kind==='login'&&official)){
     const cli=await agentExecutable(acct.agentToolId);
     delete env.CLAUDE_CONFIG_DIR;
+    // On Windows an npm .cmd shim is bypassed when its target can be found, so arguments never pass through cmd.exe.
+    const shimmed=process.platform==='win32'&&!/\.exe$/i.test(cli),direct=shimmed?await platformTools.resolveCmdShim(cli,env):null,viaCmd=shimmed&&!direct;
     let cliArgs=[];
     if(official){const prepared=await officialEnv(acct,cli);for(const name of prepared.clearEnv)delete env[name];Object.assign(env,prepared.env);if(kind==='login')cliArgs=prepared.loginArgs;
-      // Qoder hands its account balance to the status line; a Windows command shim cannot carry this JSON safely.
-      else if(acct.agentToolId==='qoder-cli'&&(process.platform!=='win32'||/\.exe$/i.test(cli))){
+      // Qoder hands its account balance to the status line; cmd.exe cannot carry this JSON safely.
+      else if(acct.agentToolId==='qoder-cli'&&!viaCmd){
         env.ELECTRON_RUN_AS_NODE='1';env.ACCOUNTOR_ACCOUNT_PROVIDER='custom';env.ACCOUNTOR_RUN_ID=sessionId;env.ACCOUNTOR_TELEMETRY_DIR=telemetryDir;
         cliArgs=['--settings',JSON.stringify({statusLine:platformTools.hookSettings(process.execPath,path.join(root,'scripts/claude-telemetry.cjs'),null).statusLine})];
       }}
@@ -405,9 +414,16 @@ async function startSession(input) {
       if(headless.opencodePermission)env.OPENCODE_CONFIG_CONTENT=schedules.mergeOpencodeConfig(env.OPENCODE_CONFIG_CONTENT,headless.opencodePermission);
     }
     else if(kind==='agent'&&input.handoffFile)cliArgs=[...cliArgs,...agentTranscripts.handoffArgs(acct.agentToolId,input.handoffFile)];
+    let promptArgs=[];
+    if(kind==='agent'){
+      const plan=await systemPrompts.launchPlan(acct.agentToolId,systemPrompts.promptFor(store.state.settings.systemPrompts,acct.agentToolId),{file:promptFile,env,shim:viaCmd});
+      cliArgs=[...plan.before,...cliArgs,...plan.after];Object.assign(env,plan.env);promptArgs=[...plan.before,...plan.after];
+    }
     const pathKey=process.platform==='win32'?'Path':'PATH';env[pathKey]=[path.dirname(cli),env[pathKey]].join(process.platform==='win32'?';':':');
-    file=cli;args=cliArgs;
-    if(process.platform==='win32'&&!/\.exe$/i.test(cli)){if(cli.includes('"')||cliArgs.some(a=>/["%^]/.test(a)))throw new Error('无效的程序路径或参数');file=process.env.ComSpec||'C:\\Windows\\System32\\cmd.exe';args=`/d /s /c ""${cli}"${cliArgs.map(a=>' '+(/\s/.test(a)?'"'+a+'"':a)).join('')}"`;}
+    file=direct?.file||cli;args=[...(direct?.args||[]),...cliArgs];
+    if(viaCmd&&promptArgs.some(a=>/["%^\r\n]/.test(a)))throw new Error((agentTools.find(t=>t.id===acct.agentToolId)?.name||'该 Agent')+' 的启动脚本无法识别，只能经 cmd.exe 启动，传不了含引号、%、^ 或换行的系统提示词，请在“设置 → 系统提示词”中调整或取消对它生效');
+    if(viaCmd){file=process.env.ComSpec||'C:\\Windows\\System32\\cmd.exe';args=platformTools.cmdShimCommand(cli,cliArgs);}
+    else if(process.platform==='win32')args=platformTools.windowsCommandLine(args);
   }else if (acct) {
     if(acct.source!=='existing')await installTelemetry(acct.id);
     file = await accountExecutable(acct);
@@ -429,9 +445,11 @@ async function startSession(input) {
       for (const project of projects.slice(1)) {
         try { extra.push(await fs.realpath(project.path)); } catch { throw new Error('附加项目不可访问：' + project.path); }
       }
-      if(input.handoffFile)args.push('--append-system-prompt-file',input.handoffFile);
-      else if (input.resumeFile) args.push('--resume', input.resumeFile, '--fork-session');
-      else if (input.resumeId) args.push('--resume', input.resumeId);
+      const appended=systemPrompts.promptFor(store.state.settings.systemPrompts,'claude-code');
+      if(appended)args.push(...(await systemPrompts.launchPlan('claude-code',appended,{file:promptFile,handoffFile:input.handoffFile})).after);
+      else if(input.handoffFile)args.push('--append-system-prompt-file',input.handoffFile);
+      if(!input.handoffFile&&input.resumeFile) args.push('--resume', input.resumeFile, '--fork-session');
+      else if(!input.handoffFile&&input.resumeId) args.push('--resume', input.resumeId);
       if (extra.length&&!input.headless) args.push('--add-dir', ...extra);
       if(input.headless)args.push(...schedules.headlessArgs('claude-code',input.headless.prompt,input.headless.permission).args);
     }
@@ -565,7 +583,7 @@ async function performRestore(sid,fromTrash){
       const w=s.workspaces.find(w=>w.id===source.workspaceId);if(w){s.selectedWorkspace=w.id;w.selectedSession=target.id;w.collapsed=false;w.hiddenGroups=(w.hiddenGroups||[]).filter(g=>g!==target.groupId);}
     });
     terminals.delete(sid);
-    for(const type of ['event','usage'])await fs.rm(path.join(telemetryDir,sid+'-'+type+'.json'),{force:true}).catch(()=>{});
+    for(const name of ['event.json','usage.json','prompt.md'])await fs.rm(path.join(telemetryDir,sid+'-'+name),{force:true}).catch(()=>{});
     pushState();return store.state.sessions.find(r=>r.id===result.id);
   }catch(error){
     const targets=store.state.sessions.filter(r=>r.pendingRestore===sid);
@@ -720,7 +738,7 @@ function registerHandlers() {
       }
     });
     terminals.delete(sid);
-    for(const type of ['event','usage'])await fs.rm(path.join(telemetryDir,sid+'-'+type+'.json'),{force:true}).catch(()=>{});
+    for(const name of ['event.json','usage.json','prompt.md'])await fs.rm(path.join(telemetryDir,sid+'-'+name),{force:true}).catch(()=>{});
     pushState();return true;
     }finally{deletingSessions.delete(sid);}
   });
@@ -841,7 +859,7 @@ function registerHandlers() {
         }
       });
       terminals.delete(sid);
-      for(const type of ['event','usage'])await fs.rm(path.join(telemetryDir,sid+'-'+type+'.json'),{force:true}).catch(()=>{});
+      for(const name of ['event.json','usage.json','prompt.md'])await fs.rm(path.join(telemetryDir,sid+'-'+name),{force:true}).catch(()=>{});
       pushState();return store.state.sessions.find(r=>r.id===result.id);
     } catch(e) { await store.update(s=>{const op=s.operations.find(o=>o.id===operation.id);if(op)Object.assign(op,{status:'failed',error:e.message});const original=s.sessions.find(r=>r.id===sid);if(original?.status==='exited'){original.status='interrupted';original.error='账号切换未完成，原会话和检查点已保留，可重新恢复。';}}); pushState(); throw e; }
   });
@@ -879,7 +897,8 @@ function registerHandlers() {
   register('git:unstage',gitWrite(gitView.unstage));
   register('git:commit',gitWrite(gitView.commit));
   register('settings:save', async input => {
-    await store.update(s=> { s.settings = { ...s.settings, theme:['light','dark','system'].includes(input.theme)?input.theme:s.settings.theme,navigationCollapsed:typeof input.navigationCollapsed==='boolean'?input.navigationCollapsed:s.settings.navigationCollapsed, opacity:Math.min(100,Math.max(0,Number(input.opacity??s.settings.opacity))), fontSize:Number.isFinite(Number(input.fontSize))?Math.min(32,Math.max(10,Number(input.fontSize))):s.settings.fontSize,fontFamily:['JetBrains Mono','system','Menlo','Monaco','Consolas'].includes(input.fontFamily)?input.fontFamily:s.settings.fontFamily,lineHeight:Number.isFinite(Number(input.lineHeight))?Math.min(2,Math.max(1,Number(input.lineHeight))):s.settings.lineHeight,terminalRenderer:['classic','fullscreen'].includes(input.terminalRenderer)?input.terminalRenderer:s.settings.terminalRenderer, ...(typeof input.claudePath==='string'?{claudePath:input.claudePath}:{}), ...(typeof input.shell==='string'?{shell:input.shell}:{}) }; }); pushState();
+    const prompts=input.systemPrompts!==undefined?systemPrompts.normalizePrompts(input.systemPrompts):undefined;
+    await store.update(s=> { s.settings = { ...s.settings,...(prompts?{systemPrompts:prompts}:{}), theme:['light','dark','system'].includes(input.theme)?input.theme:s.settings.theme,navigationCollapsed:typeof input.navigationCollapsed==='boolean'?input.navigationCollapsed:s.settings.navigationCollapsed, opacity:Math.min(100,Math.max(0,Number(input.opacity??s.settings.opacity))), fontSize:Number.isFinite(Number(input.fontSize))?Math.min(32,Math.max(10,Number(input.fontSize))):s.settings.fontSize,fontFamily:['JetBrains Mono','system','Menlo','Monaco','Consolas'].includes(input.fontFamily)?input.fontFamily:s.settings.fontFamily,lineHeight:Number.isFinite(Number(input.lineHeight))?Math.min(2,Math.max(1,Number(input.lineHeight))):s.settings.lineHeight,terminalRenderer:['classic','fullscreen'].includes(input.terminalRenderer)?input.terminalRenderer:s.settings.terminalRenderer, ...(typeof input.claudePath==='string'?{claudePath:input.claudePath}:{}), ...(typeof input.shell==='string'?{shell:input.shell}:{}) }; }); pushState();
   });
   register('settings:background', async remove => {
     let file='';
