@@ -57,7 +57,10 @@ try{
  await fs.writeFile(path.join(reports,'windows-agent-prompts.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));
  await exitTestApp(app);
 }catch(error){
- await fs.writeFile(path.join(reports,'windows-agent-prompts.json'),JSON.stringify({passed:false,platform:process.platform,checks,error:String(error),launches:await lines()},null,2));
+ const failure={passed:false,platform:process.platform,checks,error:String(error.message||error).slice(0,4000),launches:await lines().catch(()=>[]),sessions:await app.windows()[0]?.evaluate(async()=>(await window.accountor.invoke('state:get')).sessions.map(s=>({kind:s.kind,accountId:s.accountId,status:s.status,error:s.error,exitCode:s.exitCode}))).catch(e=>String(e))};
+ await fs.writeFile(path.join(reports,'windows-agent-prompts.json'),JSON.stringify(failure,null,2));
+ // Job logs need a signed-in viewer; an annotation shows the failure on the public run page.
+ console.log('::error title=windows-agent-prompt-smoke::'+JSON.stringify(failure).slice(0,30000).replace(/%/g,'%25').replace(/\r/g,'%0D').replace(/\n/g,'%0A'));
  console.error(error);app.process().kill();process.exitCode=1;
 }finally{clearTimeout(deadline);}
 process.exit(process.exitCode||0);
