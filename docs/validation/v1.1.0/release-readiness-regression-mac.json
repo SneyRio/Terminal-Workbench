@@ -1,0 +1,17 @@
+{
+  "passed": true,
+  "checks": [
+    "fresh installation displays guide and missing CLI prevents advancing until configured or explicitly deferred",
+    "a built-in workspace in its own folder hosts sessions without a workspace, cannot be removed or repointed, and stays after user workspaces",
+    "native CLI selection persists a valid path and guide routes to real account management",
+    "arbitrary configuration directory imports through native picker and deduplicates without copying or modifying credentials",
+    "guide can be reopened and deferred explicitly with restart-persistent completion",
+    "unpublished and offline update checks report states without downloading or installing code",
+    "a saved update proxy carries the update request, invalid addresses are refused, other hosts are blocked before leaving the app and clearing it returns to the system proxy",
+    "manual backup records configuration locally and leaves referenced project data intact",
+    "second packaged instance exits and does not overwrite state or interrupt the first window",
+    "version upgrade snapshots prior data before migration and preserves imported identity and unsaved drafts"
+  ],
+  "packaged": true,
+  "modelPrompts": 0
+}

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, safeStorage, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, safeStorage, session, Notification } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { existsSync } = require('node:fs');
@@ -13,6 +13,8 @@ const {tools:agentTools,requireTool}=require('./agent-tools.cjs');
 const agentCatalog=require('./agent-catalog.cjs');
 const agentInstall=require('./agent-install.cjs');
 const agentUsage=require('./agent-usage.cjs');
+const agentTranscripts=require('./agent-transcripts.cjs');
+const schedules=require('./schedules.cjs');
 const {inspectLegacy,retireLegacy}=require('./app-migration.cjs');
 const {taskText,defaultTitle,migrateTitle,applyTaskTitle,copyTitle,transcriptTitle}=require('./session-titles.cjs');
 const {pruneDeleted,findDeleted,forgetDeleted,archiveSession,replaceSession,deduplicateRecovered}=require('./session-history.cjs');
@@ -44,6 +46,24 @@ const terminals = new Map();
 let win, quitting = false;
 const notify = (channel, payload) => { if (win && !win.isDestroyed()) win.webContents.send(channel, payload); };
 const pushState = () => notify('state:changed', store.state);
+// Sessions started outside any workspace run here. Isolated test data keeps its own copy so tests never touch the home folder.
+const DEFAULT_WORKSPACE_ID='default';
+const defaultWorkspaceDir=process.env.ACCOUNTOR_DATA_DIR?path.join(dataRoot,'wbspace'):path.join(os.homedir(),'wbspace');
+async function ensureDefaultWorkspace(){
+  await fs.mkdir(defaultWorkspaceDir,{recursive:true});
+  const real=await fs.realpath(defaultWorkspaceDir);
+  await store.update(s=>{
+    const project={path:real,name:path.basename(real)};
+    let w=s.workspaces.find(w=>w.id===DEFAULT_WORKSPACE_ID);
+    if(!w){
+      const claude=s.accounts.find(a=>(a.agentToolId||'claude-code')==='claude-code'&&a.status!=='login');
+      w={id:DEFAULT_WORKSPACE_ID,name:'无工作空间会话',group:'',pinned:false,lastUsedAt:Date.now(),projects:[project],backend:'embedded',accountId:claude?.id||s.accounts[0]?.id||'',rightOpen:false,rightWidth:360,createdAt:Date.now(),createdOrder:0};
+      s.workspaces.push(w);
+    }
+    // Always last, so it never shifts the user's own workspaces.
+    s.workspaces=[...s.workspaces.filter(x=>x.id!==DEFAULT_WORKSPACE_ID),Object.assign(w,{builtIn:true,projects:[project]})];
+  });
+}
 const updateDir=path.join(dataRoot,'updates.noindex');
 const updateTarget=()=>updateInstall.resolveInstall({platform:process.platform,arch:process.arch,isPackaged:app.isPackaged,exePath:app.getPath('exe')});
 // Update traffic has its own session: a chosen proxy reaches nothing else, and only trusted hosts can be contacted, redirects included.
@@ -155,6 +175,98 @@ async function installAgent(id){
   return result.installed;
 }
 
+// ---- Scheduled tasks: run only while the app is running; each run is an ordinary session that can be resumed.
+const runTimers=new Map();
+const gitAt=(dir,args,timeout=60000)=>exec('git',['-C',dir,...args],{windowsHide:true,timeout,maxBuffer:4*1024*1024,env:{...process.env,GIT_TERMINAL_PROMPT:'0'}}).then(r=>r.stdout.trim());
+const scheduleRuns=()=>store.state.scheduleRuns||[];
+async function recordRun(run){
+  await store.update(s=>{
+    s.scheduleRuns||=[];const i=s.scheduleRuns.findIndex(r=>r.id===run.id);if(i<0)s.scheduleRuns.push(run);else s.scheduleRuns[i]={...s.scheduleRuns[i],...run};
+  });
+  await pruneRuns(run.scheduleId);pushState();
+}
+// Keeps the latest 20 runs per task; worktrees of dropped runs are removed with them.
+async function pruneRuns(scheduleId){
+  const runs=scheduleRuns().filter(r=>r.scheduleId===scheduleId&&r.status!=='running').sort((a,b)=>b.startedAt-a.startedAt),drop=runs.slice(20);
+  for(const run of drop)await removeRunWorktree(run).catch(()=>{});
+  if(drop.length)await store.update(s=>{const ids=new Set(drop.map(r=>r.id));s.scheduleRuns=s.scheduleRuns.filter(r=>!ids.has(r.id));});
+}
+async function removeRunWorktree(run){
+  if(!run.worktree)return;
+  if(!inside(path.join(dataRoot,'worktrees'),run.worktree))throw new Error('无效的工作树路径');
+  await gitAt(run.repo,['worktree','remove','--force',run.worktree]).catch(async()=>{await fs.rm(run.worktree,{recursive:true,force:true});await gitAt(run.repo,['worktree','prune']).catch(()=>{});});
+  await store.update(s=>{const r=(s.scheduleRuns||[]).find(r=>r.id===run.id);if(r){r.worktreeRemoved=true;}});
+}
+function notifyRun(task,title,body){if(task.notify&&Notification.isSupported())new Notification({title:'定时任务 · '+task.name,body:title+(body?'：'+body:'')}).show();}
+async function runSchedule(scheduleId,trigger){
+  const task=(store.state.schedules||[]).find(t=>t.id===scheduleId);if(!task)throw new Error('定时任务不存在');
+  const run={id:id(),scheduleId,trigger,startedAt:Date.now(),status:'running'};
+  const skip=async reason=>{await recordRun({...run,status:'skipped',finishedAt:Date.now(),reason});notifyRun(task,'已跳过',reason);return store.state.scheduleRuns.find(r=>r.id===run.id);};
+  if(scheduleRuns().some(r=>r.scheduleId===scheduleId&&r.status==='running'))return skip('上一次运行尚未结束');
+  let workspace,account;try{workspace=store.workspace(task.workspaceId);account=store.account(task.accountId);}catch(e){return skip(e.message);}
+  const tool=account.agentToolId||'claude-code';
+  if(tool==='claude-code'||usesOfficialCli(account)){await statusAccount(account.id).catch(()=>{});if(store.account(account.id).status==='login')return skip('账号需要重新登录');}
+  const blocked=schedules.quotaBlocked(store.account(account.id).usage);if(blocked)return skip(blocked);
+  const project=workspace.projects[0]?.path;if(!project)return skip('工作空间没有项目');
+  let cwd=project;
+  if(task.worktree){
+    let repo='';try{repo=await fs.realpath(await gitAt(project,['rev-parse','--show-toplevel']));}catch{}
+    if(!repo)return skip('项目不是 Git 仓库，无法创建独立工作树');
+    const worktree=path.join(dataRoot,'worktrees',run.id),branch=schedules.worktreeBranch(task.name,run.startedAt);
+    await fs.mkdir(path.dirname(worktree),{recursive:true,mode:0o700});
+    try{await gitAt(repo,['worktree','add','-b',branch,worktree,'HEAD']);}catch(e){return skip('创建工作树失败：'+String(e.stderr||e.message).trim().split('\n')[0]);}
+    Object.assign(run,{repo,worktree,branch,base:await gitAt(worktree,['rev-parse','HEAD'])});
+    cwd=path.join(worktree,path.relative(repo,await fs.realpath(project)));
+  }
+  await recordRun(run);
+  try{
+    const stamp=new Date(run.startedAt).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+    const started=await startSession({workspaceId:workspace.id,accountId:account.id,kind:'claude',resumeCwd:cwd,headless:{prompt:task.prompt,permission:task.permission},title:'定时 · '+task.name+' · '+stamp,scheduleRunId:run.id});
+    await recordRun({id:run.id,scheduleId,sessionId:started.id});
+    runTimers.set(run.id,setTimeout(()=>{const t=terminals.get(started.id);void recordRun({id:run.id,scheduleId,timedOut:true});if(t&&!t.closed)try{t.proc.kill();}catch{}},task.timeoutMinutes*60000));
+    return store.state.scheduleRuns.find(r=>r.id===run.id);
+  }catch(e){
+    await recordRun({id:run.id,scheduleId,status:'failed',finishedAt:Date.now(),reason:e.message});notifyRun(task,'启动失败',e.message);
+    if(run.worktree)await removeRunWorktree(run).catch(()=>{});
+    return store.state.scheduleRuns.find(r=>r.id===run.id);
+  }
+}
+async function finishScheduledRun(sessionId,exitCode){
+  // Matched through the session itself, since a very short run can exit before its session id is recorded.
+  const runId=store.state.sessions.find(r=>r.id===sessionId)?.scheduleRunId;
+  const run=scheduleRuns().find(r=>r.id===runId&&r.status==='running');if(!run)return;
+  clearTimeout(runTimers.get(run.id));runTimers.delete(run.id);
+  const result={id:run.id,scheduleId:run.scheduleId,finishedAt:Date.now(),exitCode,status:run.timedOut?'timeout':exitCode===0?'success':'failed'};
+  if(run.worktree){
+    const changed=(await gitAt(run.worktree,['status','--porcelain']).catch(()=>'')).split('\n').filter(Boolean).length;
+    const commits=Number(await gitAt(run.worktree,['rev-list','--count',run.base+'..HEAD']).catch(()=>'0'))||0;
+    Object.assign(result,{changedFiles:changed,commits});
+  }
+  await recordRun(result);
+  const task=(store.state.schedules||[]).find(t=>t.id===run.scheduleId);
+  if(task)notifyRun(task,result.status==='success'?'已完成':result.status==='timeout'?'已超时并结束':'运行失败',result.changedFiles||result.commits?`改动 ${result.changedFiles} 个文件、${result.commits} 个提交，见分支 ${run.branch}`:result.status==='failed'?'退出码 '+exitCode:'');
+}
+// Checked twice a minute; a due task runs once and its next time is computed from now, so a sleeping Mac never queues a backlog.
+async function tickSchedules(){
+  const now=Date.now();
+  for(const task of store.state.schedules||[]){
+    if(!task.enabled||!task.nextRunAt||task.nextRunAt>now)continue;
+    await store.update(s=>{const t=s.schedules.find(t=>t.id===task.id);if(t)t.nextRunAt=schedules.nextRun(t.rule,now);});pushState();
+    void runSchedule(task.id,'schedule').catch(()=>{});
+  }
+}
+async function startSchedules(){
+  const now=Date.now();
+  await store.update(s=>{
+    s.schedules||=[];s.scheduleRuns||=[];
+    for(const r of s.scheduleRuns)if(r.status==='running')Object.assign(r,{status:'interrupted',finishedAt:r.finishedAt||now,reason:'应用退出时仍在运行'});
+    // Missed while the app was closed: run once now if allowed, otherwise wait for the next time.
+    for(const t of s.schedules)if(t.enabled&&(!t.nextRunAt||t.nextRunAt<=now))t.nextRunAt=t.catchUp&&t.nextRunAt?now:schedules.nextRun(t.rule,now);
+  });
+  setInterval(()=>{void tickSchedules().catch(()=>{});},30000).unref();
+  setTimeout(()=>{void tickSchedules().catch(()=>{});},5000).unref();
+}
+
 async function installTelemetry(accountId) {
   const dir = accountDir(accountId);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
@@ -208,14 +320,40 @@ async function sourceTranscript(source){
   throw new Error('尚无可恢复的会话记录，请先完成一个回合或新建目标账号的会话');
 }
 
-async function sourceHandoff(source,file){
-  const context={accountName:store.account(source.accountId).name,cwd:source.cwd,projects:source.projects||store.workspace(source.workspaceId).projects};
-  const bundle=buildHandoff(await fs.readFile(file,'utf8'),context);
+const accountLabel=account=>(agentTools.find(t=>t.id===(account.agentToolId||'claude-code'))?.name||'Claude Code')+' · '+account.name;
+async function sourceHandoff(source,file){return handoffFromRaw(source,file?await fs.readFile(file,'utf8'):'',!!file&&file===source.checkpoint);}
+async function handoffFromRaw(source,raw,fromCheckpoint){
+  const context={accountName:accountLabel(store.account(source.accountId)),cwd:source.cwd,projects:source.projects||store.workspace(source.workspaceId).projects};
+  const bundle=raw?buildHandoff(raw,context):{text:'',truncated:false};
   if(source.handoffFile&&inside(path.join(dataRoot,'handoffs'),source.handoffFile)){
     const inherited=await fs.readFile(source.handoffFile,'utf8');
-    return {text:inherited+(file===source.checkpoint?'':'\n\n# 交接后的新增会话\n\n'+bundle.text),truncated:bundle.truncated};
+    return {text:inherited+(fromCheckpoint||!raw?'':'\n\n# 交接后的新增会话\n\n'+bundle.text),truncated:bundle.truncated};
   }
   return bundle;
+}
+// Finds what this session's agent recorded since it was launched, converted to the Claude transcript shape.
+async function agentRaw(source){
+  const account=store.account(source.accountId),tool=account.agentToolId,home=connections.officialHome(account.id,tool),since=(source.createdAt||0)-5000;
+  if(tool==='codex-cli'){const file=await agentTranscripts.findCodexTranscript(home,source.cwd,since);return file?agentTranscripts.codexToClaude(await fs.readFile(file,'utf8')):'';}
+  if(tool==='qoder-cli'){const file=await agentTranscripts.findQoderTranscript(home,source.cwd,since);return file?fs.readFile(file,'utf8'):'';}
+  if(tool==='opencode'){
+    const cli=await agentExecutable(tool);
+    const env=usesOfficialCli(account)?(await officialEnv(account,cli)).env:{...cliEnv(null),...(await connections.env(account))};delete env.CLAUDE_CONFIG_DIR;
+    const shim=process.platform==='win32'&&!/\.exe$/i.test(cli);
+    const run=args=>exec(shim?(process.env.ComSpec||'cmd.exe'):cli,[...(shim?['/d','/c',cli]:[]),...args],{env,cwd:source.cwd,windowsHide:true,timeout:30000,maxBuffer:64*1024*1024});
+    const listed=JSON.parse((await run(['session','list','--format','json'])).stdout||'[]');
+    const sessionId=agentTranscripts.pickOpencodeSession(listed,source.cwd,since);if(!sessionId)return '';
+    const out=(await run(['export',sessionId])).stdout;return agentTranscripts.opencodeToClaude(JSON.parse(out.slice(out.indexOf('{'))));
+  }
+  return '';
+}
+const switchableStatus=source=>source.kind==='claude'?['idle','exited'].includes(source.status):source.kind==='agent'&&source.status!=='starting';
+// Claude-to-Claude can resume natively; anything involving another agent carries a handoff instead.
+async function switchSource(source){
+  if(source.kind==='claude'){const empty=await sourceIsEmpty(source);const file=empty?null:await sourceTranscript(source);return {empty,raw:file?await fs.readFile(file,'utf8'):'',file};}
+  const raw=await agentRaw(source).catch(()=>'');
+  const usable=agentTranscripts.hasTurns(raw)?raw:'';
+  return {empty:!usable&&!source.handoffFile,raw:usable,file:null};
 }
 
 async function sourceIsEmpty(source){
@@ -261,9 +399,15 @@ async function startSession(input) {
         env.ELECTRON_RUN_AS_NODE='1';env.ACCOUNTOR_ACCOUNT_PROVIDER='custom';env.ACCOUNTOR_RUN_ID=sessionId;env.ACCOUNTOR_TELEMETRY_DIR=telemetryDir;
         cliArgs=['--settings',JSON.stringify({statusLine:platformTools.hookSettings(process.execPath,path.join(root,'scripts/claude-telemetry.cjs'),null).statusLine})];
       }}
+    if(kind==='agent'&&input.headless){
+      const headless=schedules.headlessArgs(acct.agentToolId,input.headless.prompt,input.headless.permission);
+      cliArgs=acct.agentToolId==='qoder-cli'?[...cliArgs,...headless.args]:headless.args;
+      if(headless.opencodePermission)env.OPENCODE_CONFIG_CONTENT=schedules.mergeOpencodeConfig(env.OPENCODE_CONFIG_CONTENT,headless.opencodePermission);
+    }
+    else if(kind==='agent'&&input.handoffFile)cliArgs=[...cliArgs,...agentTranscripts.handoffArgs(acct.agentToolId,input.handoffFile)];
     const pathKey=process.platform==='win32'?'Path':'PATH';env[pathKey]=[path.dirname(cli),env[pathKey]].join(process.platform==='win32'?';':':');
     file=cli;args=cliArgs;
-    if(process.platform==='win32'&&!/\.exe$/i.test(cli)){if(cli.includes('"'))throw new Error('无效的程序路径');file=process.env.ComSpec||'C:\\Windows\\System32\\cmd.exe';args=`/d /s /c ""${cli}"${cliArgs.length?' '+cliArgs.join(' '):''}"`;}
+    if(process.platform==='win32'&&!/\.exe$/i.test(cli)){if(cli.includes('"')||cliArgs.some(a=>/["%^]/.test(a)))throw new Error('无效的程序路径或参数');file=process.env.ComSpec||'C:\\Windows\\System32\\cmd.exe';args=`/d /s /c ""${cli}"${cliArgs.map(a=>' '+(/\s/.test(a)?'"'+a+'"':a)).join('')}"`;}
   }else if (acct) {
     if(acct.source!=='existing')await installTelemetry(acct.id);
     file = await accountExecutable(acct);
@@ -288,7 +432,8 @@ async function startSession(input) {
       if(input.handoffFile)args.push('--append-system-prompt-file',input.handoffFile);
       else if (input.resumeFile) args.push('--resume', input.resumeFile, '--fork-session');
       else if (input.resumeId) args.push('--resume', input.resumeId);
-      if (extra.length) args.push('--add-dir', ...extra);
+      if (extra.length&&!input.headless) args.push('--add-dir', ...extra);
+      if(input.headless)args.push(...schedules.headlessArgs('claude-code',input.headless.prompt,input.headless.permission).args);
     }
   }
   if(process.platform==='win32'&&acct&&kind!=='agent'&&!official&&!/\.exe$/i.test(file))throw new Error('Windows 请选择原生 Claude CLI 可执行文件 claude.exe');
@@ -296,6 +441,7 @@ async function startSession(input) {
   try{await fs.access(file,1);}catch{throw new Error('终端可执行文件不存在或无执行权限：'+file);}
   const record = { id: sessionId, workspaceId: workspace?.id || '', accountId: acct?.id || '', kind, backend, cwd, projects, pendingRestore:input.restoreSourceId,checkpoint:input.resumeFile||input.checkpointFile, handoffFile:input.handoffFile||input.inheritedHandoffFile, title: kind === 'login' ? '登录 · ' + acct.name : kind === 'shell' ? 'Shell' : 'Claude · ' + acct.name, createdAt: Date.now(), status: 'starting', groupId: input.groupId || sessionId, orientation: input.orientation || 'horizontal', authVerified:acct?store.account(acct.id).status==='valid':false, recovery:input.handoffFile?'handoff':input.resumeId || input.resumeFile ? 'requested' : undefined };
   record.titleSource='default';record.titleToken=sessionId.replaceAll('-','').slice(-6).toUpperCase();record.title=defaultTitle(record);
+  if(input.title){record.title=String(input.title).slice(0,120);record.titleSource='manual';}if(input.scheduleRunId)record.scheduleRunId=input.scheduleRunId;
   await store.update(s => { s.sessions.push(record); }); pushState();
   {
     try {
@@ -311,6 +457,7 @@ async function startSession(input) {
         clearInterval(runtime.timer);
         await store.update(s => { const r = s.sessions.find(s => s.id === sessionId); if (r) { r.status = 'exited'; r.exitCode = exitCode; } });
         notify('terminal:exit', { id: sessionId, exitCode }); pushState();
+        void finishScheduledRun(sessionId,exitCode).catch(()=>{});
         if (acct) await statusAccount(acct.id).catch(()=>{});
       });
       await store.update(s => Object.assign(s.sessions.find(s => s.id === sessionId), { status: 'running', pid: proc.pid }));
@@ -460,8 +607,11 @@ function registerHandlers() {
       if (!(await fs.stat(real)).isDirectory()) throw new Error('项目必须是文件夹');
       if (!paths.has(real)) { paths.add(real); projects.push({ path: real, name: path.basename(real) }); }
     }
+    if(input.id===DEFAULT_WORKSPACE_ID){
+      await store.update(s=>{const w=s.workspaces.find(w=>w.id===DEFAULT_WORKSPACE_ID);if(w){w.accountId=input.accountId||'';s.selectedWorkspace=w.id;}});pushState();return store.workspace(DEFAULT_WORKSPACE_ID);
+    }
     const w = { id: input.id || id(), name: input.name.trim().slice(0,100), group:String(input.group||'').trim().slice(0,80),pinned:!!input.pinned,lastUsedAt:input.lastUsedAt||Date.now(),projects, backend: 'embedded', accountId: input.accountId || '', rightOpen: input.rightOpen ?? false, rightWidth: Math.max(280, Math.min(800, input.rightWidth || 360)) };
-    await store.update(s => { const i = s.workspaces.findIndex(x => x.id === w.id); if (i < 0) {w.createdAt=Date.now();w.createdOrder=nextWorkspaceOrder(s);s.workspaces.push(w);} else s.workspaces[i] = { ...s.workspaces[i], ...w, createdAt:s.workspaces[i].createdAt,createdOrder:s.workspaces[i].createdOrder }; s.selectedWorkspace = w.id; }); pushState(); return store.workspace(w.id);
+    await store.update(s => { const i = s.workspaces.findIndex(x => x.id === w.id); if (i < 0) {w.createdAt=Date.now();w.createdOrder=nextWorkspaceOrder(s);{const at=s.workspaces.findIndex(x=>x.id===DEFAULT_WORKSPACE_ID);s.workspaces.splice(at<0?s.workspaces.length:at,0,w);}} else s.workspaces[i] = { ...s.workspaces[i], ...w, createdAt:s.workspaces[i].createdAt,createdOrder:s.workspaces[i].createdOrder }; s.selectedWorkspace = w.id; }); pushState(); return store.workspace(w.id);
   });
   register('workspace:collapse',async(wid,collapsed)=>{store.workspace(wid);if(typeof collapsed!=='boolean')throw new Error('无效的展开状态');await store.update(s=>{s.workspaces.find(w=>w.id===wid).collapsed=collapsed;});pushState();});
   register('workspace:select', async wid => { store.workspace(wid); await store.update(s => { s.selectedWorkspace = wid;s.workspaces.find(w=>w.id===wid).lastUsedAt=Date.now(); }); pushState(); });
@@ -472,6 +622,7 @@ function registerHandlers() {
     await store.update(s=>{s.workspaces.find(w=>w.id===wid).previewSplit=Math.min(.75,Math.max(.15,ratio));});pushState();
   });
   register('workspace:remove', async wid => {
+    if(wid===DEFAULT_WORKSPACE_ID)throw new Error('默认工作空间不能移除');
     if (store.state.sessions.some(s => s.workspaceId === wid && terminals.get(s.id) && ['running','busy','idle','starting'].includes(s.status))) throw new Error('请先结束该工作空间的运行中终端');
     await store.update(s => { s.workspaces = s.workspaces.filter(w => w.id !== wid); if (s.selectedWorkspace === wid) s.selectedWorkspace = s.workspaces[0]?.id || ''; }); pushState();
   });
@@ -616,45 +767,48 @@ function registerHandlers() {
   register('terminal:prepare-switch',async(sid,targetAccountId)=>{
     await pollTelemetry();
     const source=store.state.sessions.find(s=>s.id===sid),target=store.account(targetAccountId);
-    if((target.agentToolId||'claude-code')!=='claude-code')throw new Error('只能切换到同一 Agent 工具的账号');
-    if(!source||source.kind!=='claude'||!['idle','exited'].includes(source.status))throw new Error('请等待当前 Claude 回合结束后再切换');
-    if(await sourceIsEmpty(source))return {mode:'empty',nativeSupported:false,eventTime:source.eventTime,sourceName:store.account(source.accountId).name,targetName:target.name};
-    const file=await sourceTranscript(source),bundle=await sourceHandoff(source,file);
-    const handoff=(target.command==='claude-dp'||!!target.connection)||!!source.handoffFile;
-    return {...bundle,eventTime:source.eventTime,mode:handoff?'handoff':'resume',nativeSupported:!handoff,sourceName:store.account(source.accountId).name,targetName:target.name};
+    if(!source||!['claude','agent'].includes(source.kind))throw new Error('请选择一个 Agent 会话');
+    if(source.accountId===targetAccountId)throw new Error('目标账号与当前相同');
+    if(!switchableStatus(source))throw new Error('请等待当前回合结束后再切换');
+    const names={sourceName:accountLabel(store.account(source.accountId)),targetName:accountLabel(target),sourceRunning:source.kind==='agent'&&source.status!=='exited'};
+    const {empty,raw,file}=await switchSource(source);
+    if(empty)return {mode:'empty',nativeSupported:false,eventTime:source.eventTime,...names};
+    const bundle=await handoffFromRaw(source,raw,!!file&&file===source.checkpoint);
+    const native=source.kind==='claude'&&(target.agentToolId||'claude-code')==='claude-code'&&!(target.command==='claude-dp'||!!target.connection)&&!source.handoffFile;
+    return {...bundle,eventTime:source.eventTime,mode:native?'resume':'handoff',nativeSupported:native,...names};
   });
   register('terminal:handoff',async sid=>{const r=store.state.sessions.find(s=>s.id===sid);if(!r?.handoffFile||!inside(path.join(dataRoot,'handoffs'),r.handoffFile))throw new Error('没有可查看的交接资料');return fs.readFile(r.handoffFile,'utf8');});
   register('terminal:switch', async (sid, targetAccountId, options={}) => {
     if(restoringJobs.has(sid)||deletingSessions.has(sid)||store.state.sessions.find(s=>s.id===sid)?.pendingRestore)throw new Error('会话正在恢复或删除，请稍后重试');
     await pollTelemetry();
-    if((store.account(targetAccountId).agentToolId||'claude-code')!=='claude-code')throw new Error('只能切换到同一 Agent 工具的账号');
     const source = store.state.sessions.find(s => s.id === sid);
     if(options.expectedEventTime!==undefined&&options.expectedEventTime!==source?.eventTime)throw new Error('原会话已变化，请重新预览后切换');
     store.account(targetAccountId);
-    if (!source || source.kind !== 'claude') throw new Error('请选择 Claude 会话');
+    if (!source || !['claude','agent'].includes(source.kind)) throw new Error('请选择一个 Agent 会话');
     if (source.accountId === targetAccountId) throw new Error('目标账号与当前相同');
-    if (!['idle','exited'].includes(source.status)) throw new Error('请等待本轮结束；状态未知或运行中时不执行账号切换');
-    const empty=await sourceIsEmpty(source);
-    const transcript = empty?null:await sourceTranscript(source);
+    if (!switchableStatus(source)) throw new Error('请等待本轮结束；状态未知或运行中时不执行账号切换');
+    const {empty,raw,file:transcript}=await switchSource(source);
     const target=store.account(targetAccountId);
-    const mode=options.mode || (empty?'empty':target.command==='claude-dp'||target.connection||source.handoffFile?'handoff':'resume');
+    const native=source.kind==='claude'&&(target.agentToolId||'claude-code')==='claude-code';
+    const mode=options.mode || (empty?'empty':!native||target.command==='claude-dp'||target.connection||source.handoffFile?'handoff':'resume');
     if(!['empty','resume','handoff'].includes(mode)||((mode==='empty')!==empty))throw new Error('会话内容已变化，请重新预览后切换');
+    if(mode==='resume'&&!native)throw new Error('跨 Agent 或非 Claude 会话只能携带交接资料继续');
     if(mode==='resume'&&(target.command==='claude-dp'||target.connection))throw new Error('此自定义供应商请使用上下文交接，不能直接导入当前原生工具历史');
     const confirmed = options.reviewed ? {response:1} : await dialog.showMessageBox(win, { message:'切换此会话的账号？', detail:empty?'当前尚无对话记录，将保留工作目录与项目设置，以目标账号新建空白会话。':mode==='handoff'?'将保留原始会话并创建携带交接资料的新会话，不迁移原生工具运行状态。':'将保存原始会话快照并结束源 CLI，再用目标账号恢复一个分支。原始记录始终保留。', buttons:['取消',empty?'切换账号':'保存检查点并切换'], defaultId:0, cancelId:0 });
     if (confirmed.response !== 1) return null;
-    const checkpoint = empty?undefined:path.join(dataRoot, 'checkpoints', id() + '.jsonl');
+    const checkpoint = empty||!raw?undefined:path.join(dataRoot, 'checkpoints', id() + '.jsonl');
     if(checkpoint){await fs.mkdir(path.dirname(checkpoint), { recursive: true, mode:0o700 });
-    await fs.copyFile(transcript, checkpoint); await fs.chmod(checkpoint,0o600);}
+    if(transcript)await fs.copyFile(transcript, checkpoint);else await fs.writeFile(checkpoint,raw);await fs.chmod(checkpoint,0o600);}
     let handoffFile;
     if(mode==='handoff'){
-      const bundle=await sourceHandoff(source,transcript);
+      const bundle=await handoffFromRaw(source,raw,!!transcript&&transcript===source.checkpoint);
       const text=typeof options.handoffText==='string'?options.handoffText:bundle.text;
       if(Buffer.byteLength(text)>600*1024)throw new Error('交接资料超过 600 KiB，请精简后继续');
       handoffFile=path.join(dataRoot,'handoffs',id()+'.md');await fs.mkdir(path.dirname(handoffFile),{recursive:true,mode:0o700});await fs.writeFile(handoffFile,text,{mode:0o600});
     }
     await pollTelemetry();
     const current=store.state.sessions.find(s=>s.id===sid);
-    if(!['idle','exited'].includes(current.status)||current.eventTime!==source.eventTime)throw new Error('原会话已开始新的活动，请等待结束后重新预览');
+    if(!switchableStatus(current)||current.eventTime!==source.eventTime)throw new Error('原会话已开始新的活动，请等待结束后重新预览');
     const runtime = terminals.get(sid);
     if (runtime && !runtime.closed && source.status !== 'exited') {
       runtime.proc.kill();
@@ -666,13 +820,14 @@ function registerHandlers() {
     await store.update(s=>s.operations.push(operation));
     try {
       const result=await startSession({ workspaceId:source.workspaceId, accountId:targetAccountId, kind:'claude', ...(empty?{}:handoffFile?{handoffFile,checkpointFile:checkpoint}:{resumeFile:checkpoint}), resumeCwd:source.cwd, resumeProjects:source.projects, resumeBackend:source.backend });
-      const readyDeadline=Date.now()+30000;
+      const readyDeadline=Date.now()+30000,launchedAt=Date.now();
       let ready=false;
       while(Date.now()<readyDeadline){
         await pollTelemetry();
         const currentTarget=store.state.sessions.find(r=>r.id===result.id);
         if(!currentTarget||['failed','exited'].includes(currentTarget.status))throw new Error('目标 CLI 未能保持运行，原会话条目与检查点已保留');
-        if(currentTarget.claudeSessionId&&['idle','busy'].includes(currentTarget.status)){ready=true;break;}
+        // Other agents report no session events, so staying alive for a moment is the only readiness signal.
+        if(currentTarget.kind==='agent'?['running','idle','busy'].includes(currentTarget.status)&&Date.now()-launchedAt>=2500:currentTarget.claudeSessionId&&['idle','busy'].includes(currentTarget.status)){ready=true;break;}
         await new Promise(r=>setTimeout(r,250));
       }
       if(!ready)throw new Error('尚未确认目标 CLI 就绪，原会话条目与检查点已保留，请检查目标终端');
@@ -708,6 +863,21 @@ function registerHandlers() {
   register('git:status',(wid,directory)=>gitView.snapshot(store,wid,directory));
   register('git:decorations',(wid,directory)=>gitView.snapshot(store,wid,directory,false));
   register('git:diff',(wid,directory,file,group)=>gitView.diff(store,wid,directory,file,group));
+  register('git:branches',(wid,directory)=>gitView.branches(store,wid,directory));
+  register('git:head',(wid,directory)=>gitView.head(store,wid,directory));
+  const busyIn=wid=>store.state.sessions.some(s=>s.workspaceId===wid&&s.status==='busy'&&terminals.has(s.id));
+  // Every write reports back so the panel, file tree and status bar refresh together.
+  const gitWrite=(fn,{guard=''}={})=>async(wid,directory,...rest)=>{
+    store.workspace(wid);
+    if(guard&&busyIn(wid))throw new Error('有会话正在执行任务，请等它结束后再'+guard);
+    try{return await fn(store,wid,directory,...rest);}finally{notify('git:changed',{workspaceId:wid});}
+  };
+  register('git:switch',gitWrite(gitView.switchBranch,{guard:'切换分支'}));
+  register('git:pull',gitWrite(gitView.pull,{guard:'拉取'}));
+  register('git:push',gitWrite(gitView.push));
+  register('git:stage',gitWrite(gitView.stage));
+  register('git:unstage',gitWrite(gitView.unstage));
+  register('git:commit',gitWrite(gitView.commit));
   register('settings:save', async input => {
     await store.update(s=> { s.settings = { ...s.settings, theme:['light','dark','system'].includes(input.theme)?input.theme:s.settings.theme,navigationCollapsed:typeof input.navigationCollapsed==='boolean'?input.navigationCollapsed:s.settings.navigationCollapsed, opacity:Math.min(100,Math.max(0,Number(input.opacity??s.settings.opacity))), fontSize:Number.isFinite(Number(input.fontSize))?Math.min(32,Math.max(10,Number(input.fontSize))):s.settings.fontSize,fontFamily:['JetBrains Mono','system','Menlo','Monaco','Consolas'].includes(input.fontFamily)?input.fontFamily:s.settings.fontFamily,lineHeight:Number.isFinite(Number(input.lineHeight))?Math.min(2,Math.max(1,Number(input.lineHeight))):s.settings.lineHeight,terminalRenderer:['classic','fullscreen'].includes(input.terminalRenderer)?input.terminalRenderer:s.settings.terminalRenderer, ...(typeof input.claudePath==='string'?{claudePath:input.claudePath}:{}), ...(typeof input.shell==='string'?{shell:input.shell}:{}) }; }); pushState();
   });
@@ -723,6 +893,21 @@ function registerHandlers() {
   });
   register('setup:cli',async()=>{const pick=await dialog.showOpenDialog(win,{title:'选择 Claude CLI 可执行文件',properties:['openFile','showHiddenFiles']});if(pick.canceled)return null;const file=process.platform==='win32'?path.resolve(pick.filePaths[0]):await fs.realpath(pick.filePaths[0]);if(process.platform==='win32'){if(!/\.exe$/i.test(file))throw new Error('请选择 Claude 程序，不支持选择 .ps1/.cmd/.bat 启动脚本');const found=await windowsCli.detect(file,{refresh:true});if(found.path.toLowerCase()!==file.toLowerCase())throw new Error('所选程序未通过运行检查，请点击重新检测以自动查找');}await fs.access(file,1);if(!(await fs.stat(file)).isFile())throw new Error('请选择可执行文件');await store.update(s=>{s.settings.claudePath=file;});pushState();return file;});
   register('setup:finish',async()=>{await store.update(s=>{s.onboarding={completedAt:Date.now()};});pushState();});
+  const scheduleTask=input=>schedules.normalizeTask(input,{workspaceExists:wid=>store.state.workspaces.some(w=>w.id===wid),accountExists:aid=>store.state.accounts.some(a=>a.id===aid)});
+  register('schedules:save',async input=>{
+    const task=scheduleTask(input);
+    await store.update(s=>{s.schedules||=[];const i=s.schedules.findIndex(t=>t.id===input.id);const next=task.enabled?schedules.nextRun(task.rule):null;if(i<0)s.schedules.push({id:id(),createdAt:Date.now(),...task,nextRunAt:next});else s.schedules[i]={...s.schedules[i],...task,nextRunAt:next};});pushState();
+    return (store.state.schedules||[]).find(t=>t.id===input.id)||store.state.schedules.at(-1);
+  });
+  register('schedules:toggle',async(sid,enabled)=>{await store.update(s=>{const t=(s.schedules||[]).find(t=>t.id===sid);if(!t)throw new Error('定时任务不存在');t.enabled=!!enabled;t.nextRunAt=enabled?schedules.nextRun(t.rule):null;});pushState();});
+  register('schedules:remove',async sid=>{
+    if(scheduleRuns().some(r=>r.scheduleId===sid&&r.status==='running'))throw new Error('任务正在运行，请等它结束后再删除');
+    for(const run of scheduleRuns().filter(r=>r.scheduleId===sid&&r.worktree&&!r.worktreeRemoved))await removeRunWorktree(run).catch(()=>{});
+    await store.update(s=>{s.schedules=(s.schedules||[]).filter(t=>t.id!==sid);s.scheduleRuns=(s.scheduleRuns||[]).filter(r=>r.scheduleId!==sid);});pushState();
+  });
+  register('schedules:run-now',sid=>runSchedule(sid,'manual'));
+  register('schedules:remove-worktree',async rid=>{const run=scheduleRuns().find(r=>r.id===rid);if(!run?.worktree||run.worktreeRemoved)throw new Error('没有可删除的工作树');if(run.status==='running')throw new Error('任务正在运行');await removeRunWorktree(run);pushState();});
+  register('schedules:open-worktree',async rid=>{const run=scheduleRuns().find(r=>r.id===rid);if(!run?.worktree||run.worktreeRemoved||!inside(path.join(dataRoot,'worktrees'),run.worktree))throw new Error('工作树不存在');await shell.openPath(run.worktree);});
   register('agents:list',()=>agentList());
   register('agents:scan',agentId=>scanAgent(agentId));
   register('agents:install',agentId=>installAgent(agentId));
@@ -783,7 +968,9 @@ app.whenReady().then(async()=> {
     }
     await backupBeforeUpgrade(dataRoot,app.getVersion());
     await store.load();
-    await store.update(s=>{for(const a of s.accounts)if(a.source==='existing'&&!a.configDirectory){try{a.configDirectory=profileDiscovery.existingDirectory(a);}catch{}}s.installVersion=app.getVersion();if(!s.onboarding&&(s.accounts.length||s.workspaces.length))s.onboarding={completedAt:Date.now(),migrated:true};});
+    await store.update(s=>{if(!s.onboarding&&(s.accounts.length||s.workspaces.some(w=>!w.builtIn)))s.onboarding={completedAt:Date.now(),migrated:true};});
+    await ensureDefaultWorkspace().catch(error=>console.error('default workspace unavailable',error.message));
+    await store.update(s=>{for(const a of s.accounts)if(a.source==='existing'&&!a.configDirectory){try{a.configDirectory=profileDiscovery.existingDirectory(a);}catch{}}s.installVersion=app.getVersion();});
     await store.update(s=>{
       // A crash before the replacement transaction must leave one recoverable source.
       const abandoned=new Set(s.sessions.filter(r=>r.pendingRestore&&r.backend==='embedded'&&(s.sessions.some(old=>old.id===r.pendingRestore)||findDeleted(s,r.pendingRestore))).map(r=>r.id));
@@ -805,6 +992,8 @@ app.whenReady().then(async()=> {
     registerHandlers();
     setInterval(()=>{void expireDeleted().catch(()=>{});},60000).unref();
     Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'WbSpace',submenu:[{role:'about'},{type:'separator'},{label:'退出 WbSpace',accelerator:'CmdOrCtrl+Q',click:()=>app.quit()}]},{label:'编辑',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{label:'复制',accelerator:process.platform==='win32'?'Ctrl+Shift+C':'CmdOrCtrl+C',click:()=>notify('clipboard:copy-request')},{role:'paste'},{role:'selectAll'}]},{role:'viewMenu'},{role:'windowMenu'}]));
+    // Stale runs are settled before the window shows them.
+    await startSchedules();
     await createWindow();
     for(const a of store.state.accounts)if(['codex-cli','opencode'].includes(a.agentToolId)&&!a.connection&&a.status==='valid')void checkAccount(a.id).catch(()=>{});
     const lastUpdate=await updateInstall.consumeResult(updateDir);

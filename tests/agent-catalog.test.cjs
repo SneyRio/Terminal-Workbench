@@ -1,5 +1,5 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os'),{EventEmitter}=require('node:events');
-const usage=require('../electron/agent-usage.cjs'),catalog=require('../electron/agent-catalog.cjs'),install=require('../electron/agent-install.cjs'),{connection,Connections}=require('../electron/account-connections.cjs');
+const usage=require('../electron/agent-usage.cjs'),transcripts=require('../electron/agent-transcripts.cjs'),{buildHandoff}=require('../electron/core.cjs'),catalog=require('../electron/agent-catalog.cjs'),install=require('../electron/agent-install.cjs'),{connection,Connections}=require('../electron/account-connections.cjs');
 async function fixture(t){const p=await fs.mkdtemp(path.join(os.tmpdir(),'wbspace-agent-'));t.after(()=>fs.rm(p,{recursive:true,force:true}));return p;}
 const base={providerName:'网关',baseUrl:'https://example.invalid/v1',models:['m1','org/m2'],defaultModel:'org/m2',authType:'bearer'};
 const connect=over=>connection({...base,...over});
@@ -119,4 +119,31 @@ test('OpenCode stats are read from its table and an unexpected format yields not
  const table='│Sessions                                              3 │\n│Total Cost                                        $1.25 │\n│Input                                              1.2K │\n│Output                                               300 │\n';
  assert.deepEqual(usage.parseOpencodeStats(table),{local:{cost:'$1.25',input:'1.2K',output:'300',sessions:'3'}});
  assert.equal(usage.parseOpencodeStats('nothing useful'),null);
+});
+test('Codex and OpenCode conversations convert to the shared handoff shape without instructions or reasoning',()=>{
+ const row=(role,type,text)=>JSON.stringify({type:'response_item',payload:{type:'message',role,content:[{type,text}]}});
+ const codex=[JSON.stringify({type:'session_meta',payload:{cwd:'/p'}}),row('developer','input_text','SECRET RULES'),row('user','input_text','<environment_context><cwd>/p</cwd>'),row('user','input_text','修复登录'),row('assistant','output_text','已定位'),'broken'].join('\n');
+ const handoff=buildHandoff(transcripts.codexToClaude(codex),{accountName:'Codex CLI · a',cwd:'/p',projects:[{path:'/p'}]}).text;
+ assert.match(handoff,/## 用户\n修复登录/);assert.match(handoff,/## 助手\n已定位/);assert.doesNotMatch(handoff,/SECRET RULES|environment_context/);
+ const oc=transcripts.opencodeToClaude({messages:[{info:{role:'user'},parts:[{type:'text',text:'继续'}]},{info:{role:'assistant'},parts:[{type:'reasoning',text:'THINK'},{type:'text',text:'好'}]},{info:{role:'system'},parts:[{type:'text',text:'X'}]}]});
+ assert.equal(transcripts.hasTurns(oc),true);assert.doesNotMatch(oc,/THINK|"X"/);assert.equal(transcripts.hasTurns(''),false);
+ assert.doesNotMatch(buildHandoff(JSON.stringify({type:'user',message:{content:'<local-command-caveat>noise'}}),{accountName:'a',cwd:'/p',projects:[]}).text,/noise/);
+});
+test('the transcript of this launch is chosen by directory and start time',async t=>{
+ const root=await fixture(t),since=Date.now()-1000,write=async(file,lines)=>{await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,lines.map(x=>JSON.stringify(x)).join('\n'));};
+ const meta=(cwd,time)=>({type:'session_meta',payload:{cwd,timestamp:new Date(time).toISOString()}});
+ await write(path.join(root,'c/sessions/2026/11/07/rollout-old.jsonl'),[meta('/p',since-60000)]);
+ await write(path.join(root,'c/sessions/2026/11/07/rollout-other.jsonl'),[meta('/q',since+10)]);
+ assert.equal(await transcripts.findCodexTranscript(path.join(root,'c'),'/p',since),null);
+ await write(path.join(root,'c/sessions/2026/11/07/rollout-new.jsonl'),[meta('/p',since+10)]);
+ assert.equal(path.basename(await transcripts.findCodexTranscript(path.join(root,'c'),'/p',since)),'rollout-new.jsonl');
+ await write(path.join(root,'q/projects/-p/a.jsonl'),[{type:'user',cwd:'/q'}]);assert.equal(await transcripts.findQoderTranscript(path.join(root,'q'),'/p',since),null);
+ await write(path.join(root,'q/projects/-p/b.jsonl'),[{type:'system'},{type:'user',cwd:'/p'}]);assert.equal(path.basename(await transcripts.findQoderTranscript(path.join(root,'q'),'/p',since)),'b.jsonl');
+ assert.equal(transcripts.pickOpencodeSession([{id:'old',directory:'/p',created:since-9999,updated:since+5},{id:'q',directory:'/q',created:since+1,updated:since+9},{id:'a',directory:'/p',created:since+1,updated:since+2},{id:'b',directory:'/p',created:since+1,updated:since+3}],'/p',since),'b');
+ assert.equal(transcripts.pickOpencodeSession(null,'/p',since),null);
+});
+test('each agent receives the handoff as its opening prompt',()=>{
+ assert.deepEqual(transcripts.handoffArgs('opencode','/h.md').map((x,i)=>i===0?x:x.includes('/h.md')),['--prompt',true]);
+ assert.deepEqual(transcripts.handoffArgs('qoder-cli','/h.md')[0],'-i');
+ const codex=transcripts.handoffArgs('codex-cli','/h.md');assert.equal(codex.length,1);assert.match(codex[0],/\/h\.md/);assert.doesNotMatch(codex[0],/["%^]/);
 });

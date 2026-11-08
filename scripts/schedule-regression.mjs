@@ -1,0 +1,51 @@
+// Scheduled tasks with a stand-in Codex: nothing reaches a model and no real account is used.
+import {_electron as electron} from 'playwright';import {expect} from '@playwright/test';import fs from 'node:fs/promises';import path from 'node:path';import os from 'node:os';import {execFile} from 'node:child_process';import {promisify} from 'node:util';
+const exec=promisify(execFile),root=process.cwd(),dir=await fs.mkdtemp(path.join(os.tmpdir(),'wbspace-schedule-')),data=path.join(dir,'data'),project=path.join(dir,'project'),bin=path.join(dir,'bin'),dump=path.join(dir,'runs.jsonl'),checks=[];
+const git=(cwd,...args)=>exec('git',['-C',cwd,...args],{env:{...process.env,GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1'}}).then(r=>r.stdout.trim());
+await fs.mkdir(project,{recursive:true});await fs.mkdir(bin);await fs.mkdir(path.join(root,'test-results'),{recursive:true});
+await git(project,'init','-b','main');await fs.writeFile(path.join(project,'readme.md'),'hello\n');await git(project,'add','.');await git(project,'-c','user.name=F','-c','user.email=f@example.invalid','commit','-m','init');
+const codex=path.join(bin,'codex');await fs.writeFile(codex,`#!${process.execPath}
+const fs=require('node:fs'),path=require('node:path'),a=process.argv.slice(2),e=process.env;
+if(a[0]==='--version'){console.log('codex-cli 9.9.9');process.exit(0);}
+if(a[0]==='login'&&a[1]==='status'){console.error('Logged in using ChatGPT');process.exit(0);}
+if(a[0]==='app-server')process.exit(1);
+if(a[0]==='exec'){const prompt=a.at(-1);fs.appendFileSync(${JSON.stringify(dump)},JSON.stringify({argv:a,cwd:process.cwd(),home:e.CODEX_HOME})+'\\n');console.log('ran: '+prompt);
+ if(prompt.includes('WRITE'))fs.writeFileSync(path.join(process.cwd(),'report.md'),'report\\n');
+ if(prompt.includes('SLOW'))setTimeout(()=>process.exit(0),4000);else if(prompt.includes('FAIL'))process.exit(3);else process.exit(0);}
+else setInterval(()=>{},1000);
+`,{mode:0o700});
+const account=(id,name,usage=null)=>({id,agentToolId:'codex-cli',name,source:'managed',provider:'subscription',status:'valid',email:'',createdAt:1,usage});
+const task=(id,over)=>({id,name:id,prompt:'检查 '+id,workspaceId:'w',accountId:'cx',rule:{type:'daily',time:'09:00'},permission:'read',worktree:false,timeoutMinutes:30,catchUp:true,notify:false,enabled:true,nextRunAt:Date.now()+86400000,...over});
+await fs.mkdir(data,{recursive:true});
+await fs.writeFile(path.join(data,'state.json'),JSON.stringify({accounts:[account('cx','Codex 官方'),account('low','额度不足',{five_hour:{used_percentage:96}})],sessions:[],onboarding:{completedAt:1},
+ agentInstalls:{'codex-cli':{installed:true,path:codex,version:'9.9.9',issue:'',scannedAt:1}},workspaces:[{id:'w',name:'定时回归',projects:[{path:project,name:'project'}],backend:'embedded',accountId:'cx',rightOpen:false,rightWidth:360}],selectedWorkspace:'w',settings:{theme:'dark'},
+ schedules:[task('missed',{prompt:'MISSED 补跑',nextRunAt:Date.now()-3600000}),task('skipped-missed',{prompt:'不应运行',catchUp:false,nextRunAt:Date.now()-3600000})],
+ scheduleRuns:[{id:'old',scheduleId:'missed',trigger:'schedule',startedAt:Date.now()-7200000,status:'running'}]}));
+const env={...process.env,ACCOUNTOR_DATA_DIR:data};delete env.ELECTRON_RUN_AS_NODE;const binary=process.env.ACCOUNTOR_EXECUTABLE;
+const app=await electron.launch({...(binary?{executablePath:binary,args:['--use-mock-keychain']}:{args:[root,'--use-mock-keychain']}),env});
+const runsOf=async()=>(await fs.readFile(dump,'utf8').catch(()=>'')).trim().split('\n').filter(Boolean).map(JSON.parse);
+try{
+ const page=await app.firstWindow();await page.waitForFunction(()=>!!window.accountor);await page.setViewportSize({width:1440,height:1000});const invoke=(c,...a)=>page.evaluate(({c,a})=>window.accountor.invoke(c,...a),{c,a});const state=()=>invoke('state:get');
+ const realProject=await fs.realpath(project),runFor=async sid=>(await state()).scheduleRuns.filter(r=>r.scheduleId===sid).sort((a,b)=>b.startedAt-a.startedAt)[0];
+ expect((await state()).scheduleRuns.find(r=>r.id==='old')).toMatchObject({status:'interrupted'});
+ await expect.poll(async()=>(await runFor('missed'))?.status,{timeout:20000}).toBe('success');expect((await runsOf()).some(r=>r.argv.at(-1)==='MISSED 补跑')).toBe(true);expect((await runsOf()).some(r=>r.argv.at(-1)==='不应运行')).toBe(false);
+ const st=await state();expect(st.schedules.find(t=>t.id==='skipped-missed').nextRunAt).toBeGreaterThan(Date.now());expect(st.schedules.find(t=>t.id==='missed').nextRunAt).toBeGreaterThan(Date.now());checks.push('runs still marked running from a previous launch become interrupted; a missed task with catch-up runs once at startup and one without waits for its next time');
+ const read=await invoke('schedules:save',{name:'只读检查',prompt:'READ 看看依赖',workspaceId:'w',accountId:'cx',rule:{type:'interval',every:60}});expect(read).toMatchObject({permission:'read',worktree:false,enabled:true});expect(read.nextRunAt).toBeGreaterThan(Date.now()+59*60000);
+ await invoke('schedules:run-now',read.id);await expect.poll(async()=>(await runFor(read.id))?.status,{timeout:15000}).toBe('success');let last=(await runsOf()).at(-1);expect(last.argv).toEqual(['exec','--skip-git-repo-check','-s','read-only','READ 看看依赖']);expect(await fs.realpath(last.cwd)).toBe(realProject);
+ const readRun=await runFor(read.id),session=(await state()).sessions.find(s=>s.id===readRun.sessionId);expect(session.title).toMatch(/^定时 · 只读检查 · /);expect(session.status).toBe('exited');checks.push('a read-only run uses the unattended read-only command in the project and leaves a titled session');
+ const write=await invoke('schedules:save',{name:'Write Report',prompt:'WRITE 生成报告',workspaceId:'w',accountId:'cx',rule:{type:'daily',time:'09:00'},permission:'write'});expect(write.worktree).toBe(true);
+ await invoke('schedules:run-now',write.id);await expect.poll(async()=>(await runFor(write.id))?.status,{timeout:15000}).toBe('success');const wrun=await runFor(write.id);last=(await runsOf()).at(-1);
+ expect(last.argv.slice(0,4)).toEqual(['exec','--skip-git-repo-check','-s','workspace-write']);expect(await fs.realpath(last.cwd)).toBe(await fs.realpath(wrun.worktree));expect(wrun.worktree.startsWith(data)).toBe(true);expect(wrun.branch).toMatch(/^wbspace\/write-report-\d{8}-\d{6}$/);expect(wrun.changedFiles).toBe(1);
+ expect(await fs.readFile(path.join(wrun.worktree,'report.md'),'utf8')).toBe('report\n');await expect(fs.access(path.join(project,'report.md'))).rejects.toThrow();expect(await git(project,'branch','--list',wrun.branch)).toContain(wrun.branch);expect(await git(project,'status','--porcelain')).toBe('');checks.push('a writing run works in its own worktree and branch, reports the change and leaves the project untouched');
+ await invoke('schedules:remove-worktree',wrun.id);await expect(fs.access(wrun.worktree)).rejects.toThrow();expect((await runFor(write.id)).worktreeRemoved).toBe(true);checks.push('a kept worktree can be removed from the run history');
+ const slow=await invoke('schedules:save',{name:'慢任务',prompt:'SLOW 等一会',workspaceId:'w',accountId:'cx',rule:{type:'daily',time:'09:00'}});await invoke('schedules:run-now',slow.id);const second=await invoke('schedules:run-now',slow.id);expect(second).toMatchObject({status:'skipped',reason:'上一次运行尚未结束'});await expect.poll(async()=>(await state()).scheduleRuns.filter(r=>r.scheduleId===slow.id&&r.status==='success').length,{timeout:15000}).toBe(1);
+ const failing=await invoke('schedules:save',{name:'失败任务',prompt:'FAIL 退出',workspaceId:'w',accountId:'cx',rule:{type:'daily',time:'09:00'}});await invoke('schedules:run-now',failing.id);await expect.poll(async()=>(await runFor(failing.id))?.status,{timeout:15000}).toBe('failed');expect((await runFor(failing.id)).exitCode).toBe(3);
+ const quota=await invoke('schedules:save',{name:'额度任务',prompt:'不应运行',workspaceId:'w',accountId:'low',rule:{type:'daily',time:'09:00'}});expect(await invoke('schedules:run-now',quota.id)).toMatchObject({status:'skipped',reason:'五小时额度已用 96%'});checks.push('overlapping runs are skipped, a non-zero exit is recorded as failed and a nearly exhausted account is skipped');
+ await invoke('schedules:toggle',read.id,false);expect((await state()).schedules.find(t=>t.id===read.id)).toMatchObject({enabled:false,nextRunAt:null});await expect(invoke('schedules:save',{name:'坏',prompt:'x',workspaceId:'w',accountId:'cx',rule:{type:'cron',expr:'0 0 31 2 *'}})).rejects.toThrow(/不会触发/);
+ await page.getByRole('button',{name:'定时任务',exact:true}).click();const card=page.getByRole('region',{name:'定时任务 Write Report'});await expect(card).toContainText('每天 09:00');await expect(card).toContainText('可修改项目文件 · 独立工作树');await expect(page.getByRole('region',{name:'定时任务 只读检查'})).toContainText('已暂停');
+ await page.getByRole('button',{name:'新建定时任务'}).click();const dialog=page.getByRole('dialog',{name:'新建定时任务'});await expect(dialog.getByText('在独立 Git 工作树')).toHaveCount(0);await dialog.getByLabel('任务权限').selectOption('write');await expect(dialog.getByText('在独立 Git 工作树')).toBeVisible();await dialog.getByLabel('时间规则').selectOption('weekly');await expect(dialog.getByRole('group',{name:'每周运行日'})).toBeVisible();await page.screenshot({path:path.join(root,'test-results/schedule-dialog.png')});
+ await dialog.getByLabel('任务名称').fill('界面任务');await dialog.getByLabel('任务提示词').fill('UI');await dialog.getByRole('button',{name:'保存'}).click();await expect(page.getByRole('region',{name:'定时任务 界面任务'})).toContainText('每周一 09:00');await page.getByRole('region',{name:'定时任务 Write Report'}).getByText('运行记录').click();await page.screenshot({path:path.join(root,'test-results/schedules-page.png')});checks.push('the page lists tasks and the form offers a worktree only for writing tasks');
+ page.once('dialog',d=>void d.accept());await page.getByRole('button',{name:'删除 慢任务'}).click();await expect(page.getByRole('region',{name:'定时任务 慢任务'})).toHaveCount(0);expect((await state()).scheduleRuns.some(r=>r.scheduleId===slow.id)).toBe(false);
+ const report={passed:true,packaged:!!binary,checks,modelPrompts:0};await fs.writeFile(path.join(root,'test-results/schedule-regression.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
+}finally{await app.evaluate(({app})=>app.exit(0)).catch(()=>{});await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
+process.exit(0);
