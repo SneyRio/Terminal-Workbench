@@ -1034,6 +1034,8 @@ app.on('before-quit',async e=> {
   try{await draftWrites.flush();}catch(error){checkingQuit=false;dialog.showErrorBox('草稿未保存',error.message);return;}
   if(pendingUpdate){try{await updateInstall.launchHelper({platform:process.platform,target:updateTarget().target,artifact:updater.artifact(),dir:updateDir,version:updater.state().latest});}catch(error){checkingQuit=false;pendingUpdate=false;dialog.showErrorBox('无法启动更新',error.message);return;}}
   quitting=true;
-  for(const t of terminals.values())if(!t.closed)try{t.proc.kill();}catch{}
+  // Wait for the terminals to exit before quitting: tearing down a live ConPTY while the app exits crashes it on Windows (0xC0000409).
+  const live=[...terminals.values()].filter(t=>!t.closed);
+  await Promise.race([Promise.all(live.map(t=>new Promise(resolve=>{try{t.proc.onExit(()=>resolve());t.proc.kill();}catch{resolve();}}))),new Promise(resolve=>setTimeout(resolve,3000))]);
   app.quit();
 });
