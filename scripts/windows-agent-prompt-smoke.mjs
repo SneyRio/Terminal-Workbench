@@ -7,15 +7,20 @@ const root=process.cwd(),dir=path.join(root,'.test-data','Windows 提示词 '+Da
 await fs.mkdir(data,{recursive:true});await fs.mkdir(project);await fs.mkdir(npm);await fs.mkdir(reports,{recursive:true});
 
 // The exact layout `npm install -g` writes for a package whose bin is a Node script.
+// An MCP server and a command-line tool configured once in WbSpace reach every agent as well.
+const toolDir=path.join(dir,'工具 目录'),toolPath=path.join(toolDir,process.platform==='win32'?'wbtool.exe':'wbtool');
 const npmShim=target=>'@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\'+target+'" %*\r\n';
 const script=name=>`const fs=require('node:fs'),path=require('node:path'),e=process.env,a=process.argv.slice(2).filter((x,i,all)=>!(x==='-c'&&/^hooks[.]/.test(all[i+1]||''))&&!(/^hooks[.]/.test(x)&&all[i-1]==='-c'));
+if(a[0]==='mcp'){console.log('[]');process.exit(0);}
 if(a[0]==='--version'){console.log('8.8.8');process.exit(0);}
 if(a[0]==='login'&&a[1]==='status'){console.error('Logged in using ChatGPT');process.exit(0);}
 if(a[0]==='status'){console.log(JSON.stringify({logged_in:true,email:'fixture@example.invalid',username:'fixture',login_method:'fixture'}));process.exit(0);}
 if(a[0]==='app-server'||a[0]==='stats'){process.exit(1);}
 let opencode=null;try{const c=JSON.parse(e.OPENCODE_CONFIG_CONTENT||'{}');opencode=(c.instructions||[]).map(f=>fs.readFileSync(f,'utf8'));}catch(error){opencode=String(error);}
 const agents=e.CODEX_HOME&&fs.existsSync(path.join(e.CODEX_HOME,'AGENTS.md'));
-fs.appendFileSync(${JSON.stringify(dump)},JSON.stringify({name:${JSON.stringify(name)},argv:a,agentsMd:!!agents,opencode})+'\\n');
+const mi=a.indexOf('--mcp-config');let mcp=null;try{mcp=mi>=0?Object.keys(JSON.parse(fs.readFileSync(a[mi+1],'utf8')).mcpServers):Object.keys(JSON.parse(e.OPENCODE_CONFIG_CONTENT||'{}').mcp||{});}catch(error){mcp=String(error);}
+const toolOnPath=(e.PATH||'').split(path.delimiter).includes(${JSON.stringify(toolDir)});
+fs.appendFileSync(${JSON.stringify(dump)},JSON.stringify({name:${JSON.stringify(name)},argv:a,agentsMd:!!agents,opencode,mcp,toolOnPath})+'\\n');
 console.log('ready');setInterval(()=>{},1000);
 `;
 const install=async(name,target,shim)=>{const file=path.join(npm,target);await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,script(name));await fs.writeFile(path.join(npm,name+'.cmd'),shim);return path.join(npm,name+'.cmd');};
@@ -26,10 +31,14 @@ const opencode=await install('opencode','oc.js','@SET "WB_OC=%~dp0oc.js"\r\n@nod
 
 const tricky='第一行 "引号" 100% ^caret & <b> | (x) !bang!\n第二行 C:\\路径\\',quoted='"整段 引号" & 100% "尾"';
 const prompts=[{id:'shared',name:'共用',text:tricky,enabled:true,agents:['codex-cli','opencode']},{id:'qoder',name:'Qoder',text:quoted,enabled:true,agents:['qoder-cli']}];
+const mcpServers=[{id:'m1',name:'wb-files',type:'stdio',command:'C:\\tools\\files.exe',args:['--root','C:\\路径 带空格\\'],envKeys:[],headerKeys:[],enabled:true,agents:[],source:'manual'}];
+const cliTools=[{id:'t1',command:'wbtool',path:toolPath,description:'测试工具',enabled:true,agents:['codex-cli','opencode'],source:'manual'}];
+const cliNote='本机已安装以下命令行工具，需要时可直接在终端中调用：\n- wbtool（'+toolPath+'）：测试工具',sharedText=tricky+'\n\n'+cliNote;
+const mcpArgs=['-c','mcp_servers.wb-files.command='+JSON.stringify(mcpServers[0].command),'-c','mcp_servers.wb-files.args=['+mcpServers[0].args.map(a=>JSON.stringify(a)).join(',')+']'];
 const installed=file=>({installed:true,path:file,version:'8.8.8',issue:'',scannedAt:Date.now()});
 const account=(id,tool)=>({id,agentToolId:tool,name:tool+' 测试',source:'managed',provider:'subscription',status:'valid',email:'',createdAt:1,usage:null});
 await fs.mkdir(path.join(data,'accounts/oc/opencode/data/opencode'),{recursive:true});await fs.writeFile(path.join(data,'accounts/oc/opencode/data/opencode/auth.json'),'{"fixture":{}}');
-await fs.writeFile(path.join(data,'state.json'),JSON.stringify({onboarding:{completedAt:1},accounts:[account('cx','codex-cli'),account('qd','qoder-cli'),account('oc','opencode')],workspaces:[{id:'w',name:'提示词',projects:[{path:project,name:'project'}],backend:'embedded',accountId:'cx',rightOpen:false,rightWidth:360}],selectedWorkspace:'w',sessions:[],settings:{theme:'dark',systemPrompts:prompts},agentInstalls:{'codex-cli':installed(codex),'qoder-cli':installed(qoder),'opencode':installed(opencode)}}));
+await fs.writeFile(path.join(data,'state.json'),JSON.stringify({onboarding:{completedAt:1},accounts:[account('cx','codex-cli'),account('qd','qoder-cli'),account('oc','opencode')],workspaces:[{id:'w',name:'提示词',projects:[{path:project,name:'project'}],backend:'embedded',accountId:'cx',rightOpen:false,rightWidth:360}],selectedWorkspace:'w',sessions:[],settings:{theme:'dark',systemPrompts:prompts},mcpServers,cliTools,mcpScannedAt:1,cliScannedAt:1,agentInstalls:{'codex-cli':installed(codex),'qoder-cli':installed(qoder),'opencode':installed(opencode)}}));
 
 const binary=process.env.ACCOUNTOR_EXECUTABLE||path.join(root,'release/builds.noindex/WbSpace-win32-x64/WbSpace.exe'),quitReport=path.join(dir,'quit.json'),env={...process.env,ACCOUNTOR_DATA_DIR:data,ACCOUNTOR_QUIT_DIAGNOSTICS:quitReport};delete env.ELECTRON_RUN_AS_NODE;
 const app=await electron.launch({executablePath:binary,args:[],env});
@@ -40,18 +49,21 @@ try{
  const page=await app.firstWindow();await page.waitForFunction(()=>!!window.accountor);const invoke=(c,...a)=>page.evaluate(({c,a})=>window.accountor.invoke(c,...a),{c,a});
  for(const id of ['cx','qd','oc'])await invoke('terminal:start',{kind:'agent',workspaceId:'w',accountId:id});
  const cx=await launched('codex');
- expect(cx.argv).toEqual(['-c','developer_instructions='+JSON.stringify(tricky)]);expect(cx.agentsMd).toBe(false);
+ expect(cx.argv).toEqual([...mcpArgs,'-c','developer_instructions='+JSON.stringify(sharedText)]);expect(cx.agentsMd).toBe(false);expect(cx.toolOnPath).toBe(true);
  checks.push('Codex npm shim is bypassed and receives the prompt as one -c argument, no AGENTS.md fallback');
+ checks.push('Codex receives the shared MCP server as session flags and the shared CLI tool on PATH and in its prompt');
  const qd=await launched('qodercli');
- expect(qd.argv.at(-1)).toBe('--append-system-prompt='+quoted);expect(qd.argv[0]).toBe('--settings');
+ expect(qd.argv.find(x=>x.startsWith('--append-system-prompt='))).toBe('--append-system-prompt='+quoted);expect(qd.argv[0]).toBe('--settings');expect(qd.mcp).toEqual(['wb-files']);expect(qd.toolOnPath).toBe(false);
  checks.push('Qoder npm shim keeps a prompt wrapped in quotes and its status line settings');
+ checks.push('Qoder reads the shared MCP server from --mcp-config; a tool limited to other agents stays off its PATH');
  const oc=await launched('opencode');
- expect(oc.argv).toEqual([]);expect(oc.opencode).toEqual([tricky+'\n']);
+ expect(oc.argv).toEqual([]);expect(oc.opencode).toEqual([sharedText+'\n']);expect(oc.mcp).toEqual(['wb-files']);expect(oc.toolOnPath).toBe(true);
  checks.push('unrecognised OpenCode shim still runs through cmd.exe and reads the prompt file');
+ checks.push('OpenCode gets the shared MCP server through its config and the CLI tool on PATH');
  // Scheduled runs pass the user's prompt as an argument too.
  await invoke('terminal:start',{kind:'agent',workspaceId:'w',accountId:'cx',headless:{prompt:'任务 "带引号"\n第二行 50%',permission:'read'}});
  await expect.poll(async()=>(await lines()).filter(l=>l.name==='codex').length,{timeout:30000}).toBe(2);
- expect((await lines()).filter(l=>l.name==='codex').at(-1).argv).toEqual(['-c','developer_instructions='+JSON.stringify(tricky),'exec','--skip-git-repo-check','-s','read-only','任务 "带引号"\n第二行 50%']);
+ expect((await lines()).filter(l=>l.name==='codex').at(-1).argv).toEqual([...mcpArgs,'-c','developer_instructions='+JSON.stringify(sharedText),'exec','--skip-git-repo-check','-s','read-only','任务 "带引号"\n第二行 50%']);
  checks.push('scheduled Codex prompt with quotes, % and a line break arrives intact');
  const result={passed:true,platform:process.platform,checks};
  await fs.writeFile(path.join(reports,'windows-agent-prompts.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));

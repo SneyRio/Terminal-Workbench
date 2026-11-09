@@ -14,6 +14,7 @@ await fs.rm(stage,{recursive:true,force:true});await fs.mkdir(stage,{recursive:t
 for(const dir of ['dist','electron'])await fs.cp(path.join(root,dir),path.join(stage,dir),{recursive:true});
 await fs.mkdir(path.join(stage,'scripts'),{recursive:true});
 for(const file of ['claude-telemetry.cjs'])await fs.copyFile(path.join(root,'scripts',file),path.join(stage,'scripts',file));
+await fs.cp(path.join(root,'vendor/claude-hud'),path.join(stage,'vendor/claude-hud'),{recursive:true});
 await fs.mkdir(path.join(stage,'node_modules'),{recursive:true});
 await fs.cp(path.join(root,'node_modules/node-pty'),path.join(stage,'node_modules/node-pty'),{recursive:true});
 await fs.writeFile(path.join(stage,'package.json'),JSON.stringify({name:'wbspace',version,releaseChannel:identity?(profile?'notarized':'signed'):'unsigned',main:'electron/main.cjs',description:'Local workspaces for agent CLIs',author:'WbSpace',license:'UNLICENSED'}));

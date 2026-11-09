@@ -1,0 +1,9 @@
+{
+  "name": "claude-hud",
+  "version": "0.10.0",
+  "license": "MIT",
+  "author": "Jarrod Watts",
+  "type": "module",
+  "main": "dist/index.js",
+  "private": true
+}

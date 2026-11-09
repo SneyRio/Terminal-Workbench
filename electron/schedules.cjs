@@ -116,4 +116,4 @@ function worktreeBranch(name,time=Date.now()){
  return `wbspace/${slug(name)}-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
-module.exports={parseCron,normalizeRule,nextRun,describeRule,normalizeTask,headlessArgs,mergeOpencodeConfig,quotaBlocked,worktreeBranch,PERMISSIONS};
+module.exports={opencodeFullPermission:opencodePermissions.full,parseCron,normalizeRule,nextRun,describeRule,normalizeTask,headlessArgs,mergeOpencodeConfig,quotaBlocked,worktreeBranch,PERMISSIONS};

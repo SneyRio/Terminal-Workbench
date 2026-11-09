@@ -37,6 +37,22 @@ const opencodePackage={messages:'@ai-sdk/anthropic',chat:'@ai-sdk/openai-compati
 const opencodePrefix={messages:'/v1',chat:'',responses:''};
 const keyVariable='WBSPACE_PROVIDER_KEY';
 
+// Codex keeps its own state in config.toml (trusted folders, hook trust, model choices), so only WbSpace's lines are
+// replaced: the top-level model and model_provider, and the [model_providers.wbspace] table (moved to the end).
+function mergeCodexProvider(text,{model,baseUrl}){
+ const lines=String(text||'').split('\n'),kept=[];let table=null,topLevel=true;
+ for(const line of lines){
+  const header=/^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(#.*)?$/.exec(line);
+  if(header){topLevel=false;table=header[1].replace(/\s+/g,'');}
+  if(header&&/^model_providers\.(wbspace|"wbspace")(\.|$)/.test(table))continue;
+  if(table&&/^model_providers\.(wbspace|"wbspace")(\.|$)/.test(table))continue;
+  if(topLevel&&(/^\s*(model|model_provider)\s*=/.test(line)||/^#\s*WbSpace:/.test(line)))continue;
+  kept.push(line);
+ }
+ const rest=kept.join('\n').replace(/^\s+|\s+$/g,'');
+ return `# WbSpace: 自定义连接生成的模型与供应商，其余内容由 Codex 维护\nmodel = ${JSON.stringify(model)}\nmodel_provider = "wbspace"\n${rest?'\n'+rest+'\n':''}\n[model_providers.wbspace]\nname = "WbSpace"\nbase_url = ${JSON.stringify(baseUrl)}\nwire_api = "responses"\nenv_key = "${keyVariable}"\n`;
+}
+
 // Writes only non-secret settings to disk; the key reaches the CLI through its environment.
 async function prepareLaunch(agentId,connection,key,home){
  const id=protocolOf(connection);
@@ -45,7 +61,9 @@ async function prepareLaunch(agentId,connection,key,home){
  await fs.mkdir(home,{recursive:true,mode:0o700});
  if(agentId==='codex-cli'){
   if(authType==='api-key')throw new Error('Codex CLI 只支持 Bearer Token，请编辑连接修改认证方式');
-  await fs.writeFile(path.join(home,'config.toml'),`model = ${JSON.stringify(defaultModel)}\nmodel_provider = "wbspace"\n\n[model_providers.wbspace]\nname = "WbSpace"\nbase_url = ${JSON.stringify(baseUrl)}\nwire_api = "responses"\nenv_key = "${keyVariable}"\n`,{mode:0o600});
+  const file=path.join(home,'config.toml'),current=await fs.readFile(file,'utf8').catch(error=>{if(error.code==='ENOENT')return '';throw error;});
+  const next=mergeCodexProvider(current,{model:defaultModel,baseUrl});
+  if(next!==current){const tmp=file+'.'+process.pid+'.tmp';try{await fs.writeFile(tmp,next,{mode:0o600});await fs.rename(tmp,file);}finally{await fs.rm(tmp,{force:true});}}
   return {CODEX_HOME:home,[keyVariable]:key};
  }
  if(agentId==='opencode'){
@@ -86,4 +104,4 @@ async function prepareOfficial(agentId,home){
  return {env:profile.env(home),clearEnv:profile.clearEnv,loginArgs:profile.loginArgs};
 }
 
-module.exports={parseQoderStatus,parseCodexStatus,officialProfile,prepareOfficial,protocols,agents,agent,protocol,supports,protocolOf,normalizeBaseUrl,prepareLaunch,keyVariable};
+module.exports={mergeCodexProvider,parseQoderStatus,parseCodexStatus,officialProfile,prepareOfficial,protocols,agents,agent,protocol,supports,protocolOf,normalizeBaseUrl,prepareLaunch,keyVariable};

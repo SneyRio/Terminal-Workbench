@@ -17,11 +17,12 @@ const agentTranscripts=require('./agent-transcripts.cjs');
 const schedules=require('./schedules.cjs');
 const systemPrompts=require('./system-prompts.cjs');
 const agentStatus=require('./agent-status.cjs');
+const integrations=require('./integrations.cjs');
 const {inspectLegacy,retireLegacy}=require('./app-migration.cjs');
 const {taskText,defaultTitle,migrateTitle,applyTaskTitle,copyTitle,transcriptTitle}=require('./session-titles.cjs');
 const {pruneDeleted,findDeleted,forgetDeleted,archiveSession,replaceSession,deduplicateRecovered}=require('./session-history.cjs');
 const restoringJobs=new Map(),deletingSessions=new Set();
-const {configuredStatusLine}=require('./statusline.cjs');
+const {BUILTIN_HUD,inheritedStatusLine,prepareBuiltinHud}=require('./statusline.cjs');
 const {DraftBatch,TerminalHistory,appendTerminal,flushTerminal}=require('./performance.cjs');
 const { Store, atomicJson, id, inside, cleanEnv, buildHandoff } = require('./core.cjs');
 const exec = promisify(execFile);
@@ -44,6 +45,7 @@ const dataRoot = process.env.ACCOUNTOR_DATA_DIR || (app.isPackaged ? (existsSync
 app.setPath('userData', dataRoot);
 const store = new Store(dataRoot);
 const connections=new Connections(dataRoot,safeStorage);
+const mcpSecrets=new integrations.McpSecrets(path.join(dataRoot,'mcp-secrets.enc'),safeStorage);
 const terminals = new Map();
 let win, quitting = false;
 const notify = (channel, payload) => { if (win && !win.isDestroyed()) win.webContents.send(channel, payload); };
@@ -121,6 +123,37 @@ async function agentCommand(cli,args,env){
   if(process.platform!=='win32'||/\.exe$/i.test(cli))return [cli,args];
   const direct=await platformTools.resolveCmdShim(cli,env);
   return direct?[direct.file,[...direct.args,...args]]:[process.env.ComSpec||'cmd.exe',['/d','/c',cli,...args]];
+}
+// MCP servers and CLI tools shared by all agents (see integrations.cjs).
+const pathSep=process.platform==='win32'?';':':';
+// An app started from the Dock or Finder misses what the login shell exports (PATH, tokens used by MCP configs).
+let loginEnvironment=null;
+function loginEnv(){
+  if(!loginEnvironment)loginEnvironment=process.platform==='win32'?Promise.resolve({}):exec(process.env.SHELL||'/bin/zsh',['-lc','env -0'],{timeout:8000,maxBuffer:4*1024*1024}).then(r=>Object.fromEntries(r.stdout.split('\0').filter(Boolean).map(l=>{const i=l.indexOf('=');return [l.slice(0,i),l.slice(i+1)];})),()=>({}));
+  return loginEnvironment;
+}
+async function mcpLookup(){const login=await loginEnv();return name=>process.env[name]??login[name];}
+async function toolSearchDirs(){
+  const loginPath=(await loginEnv()).PATH||'';
+  return [...new Set([...platformTools.searchPath(process.env).split(pathSep),...loginPath.split(pathSep)].filter(d=>d&&path.isAbsolute(d)))];
+}
+async function scanMcpServers(){
+  let codexList=null;
+  // Only a Codex already found is asked; the scan must not start an install check of its own.
+  const known=store.state.agentInstalls?.['codex-cli'];
+  if(known?.installed&&known.path)try{const cli=known.path;const env=cliEnv(null);delete env.CODEX_HOME;const [file,args]=await agentCommand(cli,['mcp','list','--json'],env);codexList=JSON.parse((await exec(file,args,{env,windowsHide:true,timeout:20000,maxBuffer:4*1024*1024})).stdout);}catch{}
+  const scanned=await integrations.scanMcp({home:process.env.ACCOUNTOR_SCAN_HOME||os.homedir(),codexList});
+  const secrets=await mcpSecrets.read().catch(()=>({}));
+  const merged=integrations.mergeScanned(store.state.mcpServers||[],secrets,scanned,store.state.mcpDismissed||[]);
+  if(merged.added.length){await mcpSecrets.write(merged.secrets);await store.update(s=>{s.mcpServers=merged.servers;});pushState();}
+  await store.update(s=>{s.mcpScannedAt=Date.now();});pushState();
+  return {added:merged.added,found:scanned.length};
+}
+async function scanCliTools(){
+  const found=await integrations.scanCli(await toolSearchDirs());
+  const merged=integrations.mergeScannedTools(store.state.cliTools||[],found);
+  await store.update(s=>{s.cliTools=merged.tools;s.cliScannedAt=Date.now();});pushState();
+  return {added:merged.added,found:found.length};
 }
 // Codex hook trust per Codex build: hooks/list is asked once, then the result is reused.
 const codexHookTrust=new Map();
@@ -408,7 +441,7 @@ async function startSession(input) {
   if (!cwd || !(await fs.stat(cwd)).isDirectory()) throw new Error('主项目根目录不可用');
   const sessionId = id();
   const metadataPath = path.join(telemetryDir, sessionId + '-event.json');
-  const promptFile=path.join(telemetryDir,sessionId+'-prompt.md');
+  const promptFile=path.join(telemetryDir,sessionId+'-prompt.md'),mcpFile=path.join(telemetryDir,sessionId+'-mcp.json');
   const env = {...cliEnv(acct ? accountDir(acct.id) : null),...(acct?await connections.env(acct):{})};
   // Login must use the user's macOS default browser, never an embedded webview or a named browser.
   Object.assign(env,platformTools.browserSettings());
@@ -438,18 +471,30 @@ async function startSession(input) {
       if(acct.agentToolId==='codex-cli')statusArgs=await codexStatusArgs(cli,env,cwd);
       if(acct.agentToolId==='opencode')env.OPENCODE_CONFIG_CONTENT=agentStatus.mergeOpencodePlugin(env.OPENCODE_CONFIG_CONTENT,await agentStatus.opencodePlugin(path.join(dataRoot,'agent-status')));
     }
+    // YOLO: interactive sessions skip every permission prompt when the user turned it on for this agent.
+    // Scheduled runs keep the permission level chosen for the task.
+    let yoloArgs=[];
+    if(kind==='agent'&&!input.headless&&(store.state.settings.yoloAgents||[]).includes(acct.agentToolId)){
+      if(acct.agentToolId==='codex-cli')yoloArgs=['--dangerously-bypass-approvals-and-sandbox'];
+      else if(acct.agentToolId==='qoder-cli')yoloArgs=['--dangerously-skip-permissions'];
+      else if(acct.agentToolId==='opencode')env.OPENCODE_CONFIG_CONTENT=schedules.mergeOpencodeConfig(env.OPENCODE_CONFIG_CONTENT,schedules.opencodeFullPermission);
+    }
     if(kind==='agent'&&input.headless){
       const headless=schedules.headlessArgs(acct.agentToolId,input.headless.prompt,input.headless.permission);
       cliArgs=acct.agentToolId==='qoder-cli'?[...cliArgs,...headless.args]:headless.args;
       if(headless.opencodePermission)env.OPENCODE_CONFIG_CONTENT=schedules.mergeOpencodeConfig(env.OPENCODE_CONFIG_CONTENT,headless.opencodePermission);
     }
     else if(kind==='agent'&&input.handoffFile)cliArgs=[...cliArgs,...agentTranscripts.handoffArgs(acct.agentToolId,input.handoffFile)];
-    let promptArgs=[];
+    let promptArgs=[],toolDirs=[];
     if(kind==='agent'){
-      const plan=await systemPrompts.launchPlan(acct.agentToolId,systemPrompts.promptFor(store.state.settings.systemPrompts,acct.agentToolId),{file:promptFile,env,shim:viaCmd});
-      cliArgs=[...statusArgs,...plan.before,...cliArgs,...plan.after];Object.assign(env,plan.env);promptArgs=[...plan.before,...plan.after];
+      const tools=integrations.cliLaunch(store.state.cliTools,acct.agentToolId);toolDirs=tools.dirs;
+      const text=[systemPrompts.promptFor(store.state.settings.systemPrompts,acct.agentToolId),tools.prompt].filter(Boolean).join('\n\n');
+      const plan=await systemPrompts.launchPlan(acct.agentToolId,text,{file:promptFile,env,shim:viaCmd});Object.assign(env,plan.env);
+      // cmd.exe cannot carry the quoted Codex MCP flags; the other agents take a file or the environment (built on top of the prompt's).
+      const mcp=viaCmd&&acct.agentToolId==='codex-cli'?{args:[],env:{}}:await integrations.mcpLaunch(acct.agentToolId,store.state.mcpServers||[],await mcpSecrets.read().catch(()=>({})),{file:mcpFile,env,lookup:await mcpLookup()});
+      cliArgs=[...statusArgs,...yoloArgs,...(acct.agentToolId==='codex-cli'?mcp.args:[]),...plan.before,...cliArgs,...plan.after,...(acct.agentToolId==='codex-cli'?[]:mcp.args)];Object.assign(env,mcp.env);promptArgs=[...plan.before,...plan.after];
     }
-    const pathKey=process.platform==='win32'?'Path':'PATH';env[pathKey]=[path.dirname(cli),env[pathKey]].join(process.platform==='win32'?';':':');
+    const pathKey=process.platform==='win32'?'Path':'PATH';env[pathKey]=[path.dirname(cli),...toolDirs,env[pathKey]].join(pathSep);
     file=direct?.file||cli;args=[...(direct?.args||[]),...cliArgs];
     if(viaCmd&&promptArgs.some(a=>/["%^\r\n]/.test(a)))throw new Error((agentTools.find(t=>t.id===acct.agentToolId)?.name||'该 Agent')+' 的启动脚本无法识别，只能经 cmd.exe 启动，传不了含引号、%、^ 或换行的系统提示词，请在“设置 → 系统提示词”中调整或取消对它生效');
     if(viaCmd){file=process.env.ComSpec||'C:\\Windows\\System32\\cmd.exe';args=platformTools.cmdShimCommand(cli,cliArgs);}
@@ -465,7 +510,12 @@ async function startSession(input) {
     if (kind === 'login') args = ['--settings',JSON.stringify({env:platformTools.browserSettings()}),'auth', 'login', '--claudeai'];
     else {
       const settings = { hooks: {},...(backend==='embedded'?{tui:store.state.settings.terminalRenderer==='fullscreen'?'fullscreen':'default'}:{}),env:{...(backend==='embedded'&&store.state.settings.terminalRenderer!=='fullscreen'?{CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN:'1'}:{}),...platformTools.browserSettings(),...(acct.command==='claude-dp'?{ENABLE_TOOL_SEARCH:'false'}:{})} };
-      const originalStatusLine=await configuredStatusLine(accountDir(acct.id));
+      // Test runs (ACCOUNTOR_DATA_DIR) must not pick up the developer's own status line.
+      const defaultClaudeDir=!process.env.ACCOUNTOR_DATA_DIR||process.env.ACCOUNTOR_AUTO_SCAN==='1'?path.join(process.env.ACCOUNTOR_SCAN_HOME||os.homedir(),'.claude'):null;
+      const hud=await inheritedStatusLine(accountDir(acct.id),defaultClaudeDir),originalStatusLine=hud.statusLine;
+      if(hud.configDir)env.ACCOUNTOR_HUD_CONFIG_DIR=hud.configDir;
+      // Nothing configured anywhere: the claude-hud bundled with WbSpace is shown instead.
+      else if(!originalStatusLine&&existsSync(BUILTIN_HUD)){env.ACCOUNTOR_BUILTIN_HUD=BUILTIN_HUD;if(acct.source!=='existing')await prepareBuiltinHud(accountDir(acct.id)).catch(()=>{});}
       const telemetry=platformTools.hookSettings(process.execPath,telemetryScript,originalStatusLine);
       // A turn that ends on an API error such as the usage limit fires StopFailure instead of Stop (Claude Code 2.1.78+).
       const turnEnds=versionAtLeast(await claudeVersion(file,env),'2.1.78')?['Stop','StopFailure']:['Stop'];
@@ -477,13 +527,17 @@ async function startSession(input) {
       for (const project of projects.slice(1)) {
         try { extra.push(await fs.realpath(project.path)); } catch { throw new Error('附加项目不可访问：' + project.path); }
       }
-      const appended=systemPrompts.promptFor(store.state.settings.systemPrompts,'claude-code');
+      const tools=integrations.cliLaunch(store.state.cliTools,'claude-code');
+      if(tools.dirs.length){const key=Object.keys(env).find(k=>k.toLowerCase()==='path')||'PATH';env[key]=[...tools.dirs,env[key]].join(pathSep);}
+      args.push(...(await integrations.mcpLaunch('claude-code',store.state.mcpServers||[],await mcpSecrets.read().catch(()=>({})),{file:mcpFile,lookup:await mcpLookup()})).args);
+      const appended=[systemPrompts.promptFor(store.state.settings.systemPrompts,'claude-code'),tools.prompt].filter(Boolean).join('\n\n');
       if(appended)args.push(...(await systemPrompts.launchPlan('claude-code',appended,{file:promptFile,handoffFile:input.handoffFile})).after);
       else if(input.handoffFile)args.push('--append-system-prompt-file',input.handoffFile);
       if(!input.handoffFile&&input.resumeFile) args.push('--resume', input.resumeFile, '--fork-session');
       else if(!input.handoffFile&&input.resumeId) args.push('--resume', input.resumeId);
       if (extra.length&&!input.headless) args.push('--add-dir', ...extra);
       if(input.headless)args.push(...schedules.headlessArgs('claude-code',input.headless.prompt,input.headless.permission).args);
+      else if((store.state.settings.yoloAgents||[]).includes('claude-code'))args.push('--dangerously-skip-permissions');
     }
   }
   if(process.platform==='win32'&&acct&&kind!=='agent'&&!official&&!/\.exe$/i.test(file))throw new Error('Windows 请选择原生 Claude CLI 可执行文件 claude.exe');
@@ -615,7 +669,7 @@ async function performRestore(sid,fromTrash){
       const w=s.workspaces.find(w=>w.id===source.workspaceId);if(w){s.selectedWorkspace=w.id;w.selectedSession=target.id;w.collapsed=false;w.hiddenGroups=(w.hiddenGroups||[]).filter(g=>g!==target.groupId);}
     });
     terminals.delete(sid);
-    for(const name of ['event.json','usage.json','prompt.md'])await fs.rm(path.join(telemetryDir,sid+'-'+name),{force:true}).catch(()=>{});
+    for(const name of ['event.json','usage.json','prompt.md','mcp.json'])await fs.rm(path.join(telemetryDir,sid+'-'+name),{force:true}).catch(()=>{});
     pushState();return store.state.sessions.find(r=>r.id===result.id);
   }catch(error){
     const targets=store.state.sessions.filter(r=>r.pendingRestore===sid);
@@ -770,7 +824,7 @@ function registerHandlers() {
       }
     });
     terminals.delete(sid);
-    for(const name of ['event.json','usage.json','prompt.md'])await fs.rm(path.join(telemetryDir,sid+'-'+name),{force:true}).catch(()=>{});
+    for(const name of ['event.json','usage.json','prompt.md','mcp.json'])await fs.rm(path.join(telemetryDir,sid+'-'+name),{force:true}).catch(()=>{});
     pushState();return true;
     }finally{deletingSessions.delete(sid);}
   });
@@ -891,7 +945,7 @@ function registerHandlers() {
         }
       });
       terminals.delete(sid);
-      for(const name of ['event.json','usage.json','prompt.md'])await fs.rm(path.join(telemetryDir,sid+'-'+name),{force:true}).catch(()=>{});
+      for(const name of ['event.json','usage.json','prompt.md','mcp.json'])await fs.rm(path.join(telemetryDir,sid+'-'+name),{force:true}).catch(()=>{});
       pushState();return store.state.sessions.find(r=>r.id===result.id);
     } catch(e) { await store.update(s=>{const op=s.operations.find(o=>o.id===operation.id);if(op)Object.assign(op,{status:'failed',error:e.message});const original=s.sessions.find(r=>r.id===sid);if(original?.status==='exited'){original.status='interrupted';original.error='账号切换未完成，原会话和检查点已保留，可重新恢复。';}}); pushState(); throw e; }
   });
@@ -928,9 +982,23 @@ function registerHandlers() {
   register('git:stage',gitWrite(gitView.stage));
   register('git:unstage',gitWrite(gitView.unstage));
   register('git:commit',gitWrite(gitView.commit));
+  register('mcp:save',async list=>{
+    const before=store.state.mcpServers||[],secrets=await mcpSecrets.read().catch(()=>({}));
+    const next=integrations.normalizeServers(list,secrets,before);
+    await mcpSecrets.write(next.secrets);
+    // Imported servers the user removes are remembered, so the next scan does not bring them back.
+    const removed=before.filter(b=>b.source!=='manual'&&!next.servers.some(n=>n.name.toLowerCase()===b.name.toLowerCase())).map(b=>b.name);
+    await store.update(s=>{s.mcpServers=next.servers;s.mcpDismissed=[...new Set([...(s.mcpDismissed||[]),...removed])];});pushState();
+    return store.state.mcpServers;
+  });
+  register('mcp:scan',()=>scanMcpServers());
+  register('mcp:secret-keys',async serverId=>{const secret=(await mcpSecrets.read().catch(()=>({})))[serverId]||{};return {env:Object.keys(secret.env||{}),headers:Object.keys(secret.headers||{})};});
+  register('cli:save',async list=>{const tools=integrations.normalizeTools(list);await store.update(s=>{s.cliTools=tools;});pushState();return tools;});
+  register('cli:scan',()=>scanCliTools());
   register('settings:save', async input => {
     const prompts=input.systemPrompts!==undefined?systemPrompts.normalizePrompts(input.systemPrompts):undefined;
-    await store.update(s=> { s.settings = { ...s.settings,...(prompts?{systemPrompts:prompts}:{}), theme:['light','dark','system'].includes(input.theme)?input.theme:s.settings.theme,navigationCollapsed:typeof input.navigationCollapsed==='boolean'?input.navigationCollapsed:s.settings.navigationCollapsed, opacity:Math.min(100,Math.max(0,Number(input.opacity??s.settings.opacity))), fontSize:Number.isFinite(Number(input.fontSize))?Math.min(32,Math.max(10,Number(input.fontSize))):s.settings.fontSize,fontFamily:['JetBrains Mono','system','Menlo','Monaco','Consolas'].includes(input.fontFamily)?input.fontFamily:s.settings.fontFamily,lineHeight:Number.isFinite(Number(input.lineHeight))?Math.min(2,Math.max(1,Number(input.lineHeight))):s.settings.lineHeight,terminalRenderer:['classic','fullscreen'].includes(input.terminalRenderer)?input.terminalRenderer:s.settings.terminalRenderer, ...(typeof input.claudePath==='string'?{claudePath:input.claudePath}:{}), ...(typeof input.shell==='string'?{shell:input.shell}:{}) }; }); pushState();
+    const yolo=Array.isArray(input.yoloAgents)?[...new Set(input.yoloAgents.filter(id=>agentTools.some(t=>t.id===id)))]:undefined;
+    await store.update(s=> { s.settings = { ...s.settings,...(prompts?{systemPrompts:prompts}:{}),...(yolo?{yoloAgents:yolo}:{}), theme:['light','dark','system'].includes(input.theme)?input.theme:s.settings.theme,navigationCollapsed:typeof input.navigationCollapsed==='boolean'?input.navigationCollapsed:s.settings.navigationCollapsed, opacity:Math.min(100,Math.max(0,Number(input.opacity??s.settings.opacity))), fontSize:Number.isFinite(Number(input.fontSize))?Math.min(32,Math.max(10,Number(input.fontSize))):s.settings.fontSize,fontFamily:['JetBrains Mono','system','Menlo','Monaco','Consolas'].includes(input.fontFamily)?input.fontFamily:s.settings.fontFamily,lineHeight:Number.isFinite(Number(input.lineHeight))?Math.min(2,Math.max(1,Number(input.lineHeight))):s.settings.lineHeight,terminalRenderer:['classic','fullscreen'].includes(input.terminalRenderer)?input.terminalRenderer:s.settings.terminalRenderer, ...(typeof input.claudePath==='string'?{claudePath:input.claudePath}:{}), ...(typeof input.shell==='string'?{shell:input.shell}:{}) }; }); pushState();
   });
   register('settings:background', async remove => {
     let file='';
@@ -1051,6 +1119,9 @@ app.whenReady().then(async()=> {
     Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'WbSpace',submenu:[{role:'about'},{type:'separator'},{label:'退出 WbSpace',accelerator:'CmdOrCtrl+Q',click:()=>app.quit()}]},{label:'编辑',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{label:'复制',accelerator:process.platform==='win32'?'Ctrl+Shift+C':'CmdOrCtrl+C',click:()=>notify('clipboard:copy-request')},{role:'paste'},{role:'selectAll'}]},{role:'viewMenu'},{role:'windowMenu'}]));
     // Stale runs are settled before the window shows them.
     await startSchedules();
+    // Pick up MCP servers and command-line tools already configured on this machine.
+    // Test runs (ACCOUNTOR_DATA_DIR) must not pick up the developer's own configuration.
+    if(!process.env.ACCOUNTOR_DATA_DIR||process.env.ACCOUNTOR_AUTO_SCAN==='1'){void scanMcpServers().catch(()=>{});void scanCliTools().catch(()=>{});}
     await createWindow();
     for(const a of store.state.accounts)if(['codex-cli','opencode'].includes(a.agentToolId)&&!a.connection&&a.status==='valid')void checkAccount(a.id).catch(()=>{});
     const lastUpdate=await updateInstall.consumeResult(updateDir);

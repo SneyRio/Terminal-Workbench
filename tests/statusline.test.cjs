@@ -39,3 +39,34 @@ test('prompt hook writes a short title hint without storing the complete prompt'
  await new Promise((resolve,reject)=>{const proc=spawn(process.execPath,[path.resolve('scripts/claude-telemetry.cjs'),'event'],{env:{...process.env,ACCOUNTOR_TELEMETRY_DIR:root,ACCOUNTOR_RUN_ID:key},stdio:['pipe','ignore','pipe']});proc.once('error',reject);proc.once('close',code=>code===0?resolve():reject(new Error('hook failed')));proc.stdin.end(JSON.stringify({hook_event_name:'UserPromptSubmit',session_id:'native',prompt}));});
  const output=JSON.parse(await fs.readFile(path.join(root,key+'-event.json'),'utf8'));assert(output.titleHint.startsWith('修复客户端'));assert([...output.titleHint].length<=33);assert.equal(output.prompt,undefined);assert(!JSON.stringify(output).includes(prompt));
 });
+test('a new account without its own status line uses the default profile HUD with that profile directory',async t=>{
+ const {inheritedStatusLine}=require('../electron/statusline.cjs');
+ const root=await fixture(t),account=path.join(root,'account'),base=path.join(root,'default');await fs.mkdir(account);await fs.mkdir(base);
+ const hud={type:'command',command:'bun hud.mjs',padding:0};await fs.writeFile(path.join(base,'settings.json'),JSON.stringify({statusLine:hud}));
+ assert.deepEqual(await inheritedStatusLine(account,base),{statusLine:hud,configDir:base});
+ assert.deepEqual(await inheritedStatusLine(account,null),{statusLine:null,configDir:null});
+ assert.deepEqual(await inheritedStatusLine(base,base),{statusLine:hud,configDir:null});
+ const own={type:'command',command:'node own.js'};await fs.writeFile(path.join(account,'settings.json'),JSON.stringify({statusLine:own}));
+ assert.deepEqual(await inheritedStatusLine(account,base),{statusLine:own,configDir:null});
+ await fs.writeFile(path.join(account,'settings.json'),'{}');await fs.writeFile(path.join(base,'settings.json'),'not json');
+ assert.deepEqual(await inheritedStatusLine(account,base),{statusLine:null,configDir:null});
+});
+test('an inherited HUD runs with the default profile as its config directory',async t=>{
+ const root=await fixture(t),input={session_id:'s',rate_limits:{five_hour:{used_percentage:1}}};
+ const env={...process.env,ACCOUNTOR_TELEMETRY_DIR:root,ACCOUNTOR_RUN_ID:'k',CLAUDE_CONFIG_DIR:'ACCOUNT',ACCOUNTOR_HUD_CONFIG_DIR:'/default profile'};
+ assert.equal(await telemetry(input,env,'printf "%s" "$CLAUDE_CONFIG_DIR"'),'/default profile');
+ delete env.ACCOUNTOR_HUD_CONFIG_DIR;assert.equal(await telemetry(input,env,'printf "%s" "$CLAUDE_CONFIG_DIR"'),'ACCOUNT');
+});
+test('the bundled claude-hud renders when no status line is configured anywhere',async t=>{
+ const {BUILTIN_HUD,prepareBuiltinHud}=require('../electron/statusline.cjs');
+ const root=await fixture(t),account=path.join(root,'account');await fs.mkdir(account);
+ await prepareBuiltinHud(account);assert.deepEqual(JSON.parse(await fs.readFile(path.join(account,'claude-hud.json'),'utf8')),{language:'zh-Hans'});
+ await fs.writeFile(path.join(account,'claude-hud.json'),'{"language":"en"}');await prepareBuiltinHud(account);
+ assert.equal(await fs.readFile(path.join(account,'claude-hud.json'),'utf8'),'{"language":"en"}');
+ await fs.writeFile(path.join(account,'claude-hud.json'),'{"language":"zh-Hans"}');
+ const input={session_id:'s',cwd:root,model:{display_name:'Opus fixture'},rate_limits:{five_hour:{used_percentage:12},seven_day:{used_percentage:30}}};
+ const env={...process.env,ACCOUNTOR_TELEMETRY_DIR:root,ACCOUNTOR_RUN_ID:'k',CLAUDE_CONFIG_DIR:account,COLUMNS:'120',ACCOUNTOR_BUILTIN_HUD:BUILTIN_HUD};
+ const output=(await telemetry(input,env,null)).replace(/\x1b\[[0-9;]*m|\x1b\]8;;[^\x1b]*\x1b\\/g,'');
+ assert.match(output,/\[Opus fixture\]/);assert.match(output,/12%/);assert.match(output,/上下文|用量/);
+ assert.match(await telemetry(input,{...env,ACCOUNTOR_BUILTIN_HUD:path.join(root,'missing.js')},null),/HUD 暂不可用/);
+});

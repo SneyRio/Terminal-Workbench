@@ -6,6 +6,7 @@ await fs.mkdir(project,{recursive:true});await fs.mkdir(bin);await fs.mkdir(path
 await git(project,'init','-b','main');await fs.writeFile(path.join(project,'readme.md'),'hello\n');await git(project,'add','.');await git(project,'-c','user.name=F','-c','user.email=f@example.invalid','commit','-m','init');
 const codex=path.join(bin,'codex');await fs.writeFile(codex,`#!${process.execPath}
 const fs=require('node:fs'),path=require('node:path'),a=process.argv.slice(2).filter((x,i,all)=>!(x==='-c'&&/^hooks[.]/.test(all[i+1]||''))&&!(/^hooks[.]/.test(x)&&all[i-1]==='-c')),e=process.env;
+if(a[0]==='mcp'){console.log('[]');process.exit(0);}
 if(a[0]==='--version'){console.log('codex-cli 9.9.9');process.exit(0);}
 if(a[0]==='login'&&a[1]==='status'){console.error('Logged in using ChatGPT');process.exit(0);}
 if(a[0]==='app-server')process.exit(1);

@@ -22,7 +22,8 @@ function qoderHooks(runtime,script,os=process.platform){
 
 // Codex: hooks are passed as session flags. It has no failure event; Interrupt covers Esc.
 const CODEX_EVENTS=['SessionStart','UserPromptSubmit','Stop','Interrupt'];
-const codexHookArgs=command=>CODEX_EVENTS.flatMap(event=>['-c',`hooks.${event}=[{hooks=[{type="command",command=${JSON.stringify(command)},timeout=10}]}]`]);
+// Codex caps Interrupt hooks at 3 seconds and warns in its UI when asked for more.
+const codexHookArgs=command=>CODEX_EVENTS.flatMap(event=>['-c',`hooks.${event}=[{hooks=[{type="command",command=${JSON.stringify(command)},timeout=${event==='Interrupt'?3:10}}]}]`]);
 
 // Codex runs a hook only once its hash is trusted in the user config, as when someone approves it in the Codex UI.
 // Codex itself reports the key and hash through `hooks/list`, so nothing about its hashing is copied here.

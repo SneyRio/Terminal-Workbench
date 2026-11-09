@@ -20,3 +20,6 @@ vendor/python/**/__pycache__/
 .credentials.json
 
 .qoder/
+
+# Bundled claude-hud build (see scripts/vendor-claude-hud.mjs)
+!vendor/claude-hud/dist/

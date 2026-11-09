@@ -4,6 +4,7 @@ const root=process.cwd(),dir=path.join(root,'.test-data','agent-official-'+Date.
 await fs.mkdir(data,{recursive:true});await fs.mkdir(project);await fs.mkdir(bin);await fs.mkdir(path.join(root,'test-results'),{recursive:true});
 const fixture=async(name,body)=>{const file=path.join(bin,name);await fs.writeFile(file,`#!${process.execPath}
 const fs=require('node:fs'),path=require('node:path'),e=process.env,a=process.argv.slice(2).filter((x,i,all)=>!(x==='-c'&&/^hooks[.]/.test(all[i+1]||''))&&!(/^hooks[.]/.test(x)&&all[i-1]==='-c'));
+if(a[0]==='mcp'){console.log('[]');process.exit(0);}
 if(a[0]==='--version'){console.log('8.8.8');process.exit(0);}
 const record=()=>fs.appendFileSync(${JSON.stringify(dump)},JSON.stringify({name:${JSON.stringify(name)},argv:a,codexHome:e.CODEX_HOME||'',xdgData:e.XDG_DATA_HOME||'',openai:e.OPENAI_API_KEY||'',claudeDir:e.CLAUDE_CONFIG_DIR||''})+'\\n');
 ${body}

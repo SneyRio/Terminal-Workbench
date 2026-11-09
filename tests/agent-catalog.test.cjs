@@ -147,3 +147,20 @@ test('each agent receives the handoff as its opening prompt',()=>{
  assert.deepEqual(transcripts.handoffArgs('qoder-cli','/h.md')[0],'-i');
  const codex=transcripts.handoffArgs('codex-cli','/h.md');assert.equal(codex.length,1);assert.match(codex[0],/\/h\.md/);assert.doesNotMatch(codex[0],/["%^]/);
 });
+
+test('a custom Codex connection keeps what Codex wrote to config.toml',async()=>{
+ const c=require('../electron/agent-catalog.cjs'),fs=require('node:fs/promises'),os=require('node:os'),path=require('node:path');
+ const home=await fs.mkdtemp(path.join(os.tmpdir(),'wb-codex-cfg-'));
+ try{
+  const connection={providerName:'P',baseUrl:'https://a.example/v1',protocol:'responses',models:['m1'],defaultModel:'m1',authType:'bearer'};
+  await c.prepareLaunch('codex-cli',connection,'k',home);
+  const file=path.join(home,'config.toml');
+  await fs.appendFile(file,'\n[projects."/work/app"]\ntrust_level = "trusted"\n\n[hooks.state."/<session-flags>/config.toml:stop:0:0"]\ntrusted_hash = "sha256:abc"\n');
+  await c.prepareLaunch('codex-cli',{...connection,baseUrl:'https://b.example/v1',models:['m2'],defaultModel:'m2'},'k',home);
+  const text=await fs.readFile(file,'utf8');
+  assert.match(text,/\[projects\."\/work\/app"\]\ntrust_level = "trusted"/);assert.match(text,/trusted_hash = "sha256:abc"/);
+  assert.equal((text.match(/^model = /gm)||[]).length,1);assert.match(text,/^model = "m2"$/m);
+  assert.equal((text.match(/\[model_providers\.wbspace\]/g)||[]).length,1);assert.match(text,/base_url = "https:\/\/b\.example\/v1"/);
+  assert.equal(c.mergeCodexProvider(text,{model:'m2',baseUrl:'https://b.example/v1'}),text);
+ }finally{await fs.rm(home,{recursive:true,force:true});}
+});

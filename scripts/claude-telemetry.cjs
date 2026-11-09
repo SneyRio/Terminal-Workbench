@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {taskText}=require('../electron/session-titles.cjs');
-const {renderStatusLine}=require('../electron/statusline.cjs');
+const {renderStatusLine,renderBuiltinHud}=require('../electron/statusline.cjs');
 const {parseQoderCredits}=require('../electron/agent-usage.cjs');
 const cancellation=new AbortController();
 for(const signal of ['SIGTERM','SIGHUP','SIGINT'])process.once(signal,()=>{cancellation.abort();process.exit(0);});
@@ -32,12 +32,13 @@ process.stdin.on('end', async () => {
     }catch{/* Keep the user's HUD visible even when local telemetry cannot be saved. */}
     if(process.argv[2]==='usage'){
       const index=process.argv.indexOf('--delegate'),encoded=process.argv.indexOf('--delegate-base64'),command=encoded>=0?Buffer.from(process.argv[encoded+1]||'','base64').toString('utf8'):index>=0?process.argv[index+1]:null;
-      const hud=command?await renderStatusLine(command,input,{signal:cancellation.signal}):'';
+      const hudDir=process.env.ACCOUNTOR_HUD_CONFIG_DIR,builtin=process.env.ACCOUNTOR_BUILTIN_HUD;
+      const hud=command?await renderStatusLine(command,input,{signal:cancellation.signal,env:hudDir?{...process.env,CLAUDE_CONFIG_DIR:hudDir}:process.env}):builtin?await renderBuiltinHud(builtin,input,{signal:cancellation.signal}):'';
       if(hud)process.stdout.write(hud);
       else if(process.env.ACCOUNTOR_ACCOUNT_PROVIDER!=='custom') {
         const five=data.rate_limits?.five_hour?.used_percentage,week=data.rate_limits?.seven_day?.used_percentage;
         const remaining=typeof week==='number'&&Number.isFinite(week)?Math.round(Math.min(100,Math.max(0,100-week)))+'%':'未知';
-        process.stdout.write('Accountor · 5h 已用 '+(typeof five==='number'?five+'%':'未知')+' · 本周剩余 '+remaining+(command?' · HUD 暂不可用':''));
+        process.stdout.write('Accountor · 5h 已用 '+(typeof five==='number'?five+'%':'未知')+' · 本周剩余 '+remaining+(command||builtin?' · HUD 暂不可用':''));
       }
     }
   } catch { /* telemetry must never interrupt the CLI */ }

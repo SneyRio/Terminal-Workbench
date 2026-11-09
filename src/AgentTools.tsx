@@ -42,7 +42,11 @@ function ClaudePath({value,onError}:{value:string;onError:(e:unknown)=>void}){
  const save=async()=>{setSaving(true);try{await call('settings:save',{claudePath:text.trim()});await call('agents:scan','claude-code');}catch(e){onError(e);}finally{setSaving(false);}};
  return <details className="agent-path"><summary>高级：指定 CLI 路径</summary><div className="update-proxy"><label className="field">Claude CLI 路径（留空自动检测）<input aria-label="Claude CLI 路径" value={text} placeholder="自动检测" onChange={e=>setText(e.target.value)}/></label><button type="button" className="secondary" disabled={saving||text.trim()===value} onClick={()=>void save()}>{saving?'保存中…':'保存并检测'}</button></div></details>;
 }
-export function AgentToolRows({catalog,claudePath,onError}:{catalog:Catalog;claudePath:string;onError:(e:unknown)=>void}){
+const yoloFlag:Record<string,string>={'claude-code':'--dangerously-skip-permissions','codex-cli':'--dangerously-bypass-approvals-and-sandbox','qoder-cli':'--dangerously-skip-permissions','opencode':'权限配置全部允许'};
+export function AgentToolRows({catalog,claudePath,yoloAgents=[],onError}:{catalog:Catalog;claudePath:string;yoloAgents?:string[];onError:(e:unknown)=>void}){
  const label=(a:AgentInfo)=>a.unavailable||'支持协议：'+a.protocols.map(id=>catalog.protocols.find(p=>p.id===id)?.hint||id).join(' · ');
- return <>{catalog.agents.map(a=><div className="tool-config-row agent-row" key={a.id}><TerminalWindow size={25}/><div><strong>{a.name}</strong><small>{label(a)}</small><AgentStatus agent={a} onError={onError}/>{a.id==='claude-code'&&<ClaudePath value={claudePath} onError={onError}/>}</div></div>)}</>;
+ const setYolo=(id:string,on:boolean)=>void call('settings:save',{yoloAgents:on?[...new Set([...yoloAgents,id])]:yoloAgents.filter(x=>x!==id)}).catch(onError);
+ return <>{catalog.agents.map(a=><div className="tool-config-row agent-row" key={a.id}><TerminalWindow size={25}/><div><strong>{a.name}</strong><small>{label(a)}</small><AgentStatus agent={a} onError={onError}/>
+  <label className="check-field yolo-field" title={yoloFlag[a.id]}><input type="checkbox" aria-label={a.name+' YOLO 模式'} checked={yoloAgents.includes(a.id)} onChange={e=>setYolo(a.id,e.target.checked)}/>YOLO 模式：跳过所有权限确认与沙箱（{yoloFlag[a.id]}），只对新开的交互会话生效，定时任务仍按任务设置的权限运行</label>
+  {a.id==='claude-code'&&<ClaudePath value={claudePath} onError={onError}/>}</div></div>)}</>;
 }
