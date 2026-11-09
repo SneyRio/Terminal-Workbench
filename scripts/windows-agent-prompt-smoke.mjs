@@ -8,7 +8,7 @@ await fs.mkdir(data,{recursive:true});await fs.mkdir(project);await fs.mkdir(npm
 
 // The exact layout `npm install -g` writes for a package whose bin is a Node script.
 const npmShim=target=>'@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\'+target+'" %*\r\n';
-const script=name=>`const fs=require('node:fs'),path=require('node:path'),e=process.env,a=process.argv.slice(2);
+const script=name=>`const fs=require('node:fs'),path=require('node:path'),e=process.env,a=process.argv.slice(2).filter((x,i,all)=>!(x==='-c'&&/^hooks[.]/.test(all[i+1]||''))&&!(/^hooks[.]/.test(x)&&all[i-1]==='-c'));
 if(a[0]==='--version'){console.log('8.8.8');process.exit(0);}
 if(a[0]==='login'&&a[1]==='status'){console.error('Logged in using ChatGPT');process.exit(0);}
 if(a[0]==='status'){console.log(JSON.stringify({logged_in:true,email:'fixture@example.invalid',username:'fixture',login_method:'fixture'}));process.exit(0);}

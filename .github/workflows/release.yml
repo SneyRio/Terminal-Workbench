@@ -37,7 +37,7 @@ jobs:
         with:
           path: node_modules/node-pty/build
           key: windows-2022-x64-electron-45.2.2-nodepty-1.1.0-${{ hashFiles('package-lock.json') }}
-      - run: node --test tests/updates.test.cjs tests/agent-catalog.test.cjs tests/schedules.test.cjs tests/cli-discovery.test.cjs tests/file-trash.test.cjs tests/platform.test.cjs tests/system-prompts.test.cjs tests/release-readiness.test.cjs tests/performance.test.cjs tests/session-history.test.cjs tests/session-titles.test.cjs
+      - run: node --test tests/updates.test.cjs tests/agent-catalog.test.cjs tests/schedules.test.cjs tests/cli-discovery.test.cjs tests/file-trash.test.cjs tests/platform.test.cjs tests/system-prompts.test.cjs tests/agent-status.test.cjs tests/release-readiness.test.cjs tests/performance.test.cjs tests/session-history.test.cjs tests/session-titles.test.cjs
       - run: npm run package:win
       - run: ./scripts/build-windows-fixture.ps1
       - run: npm run test:windows
@@ -76,7 +76,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: node node_modules/electron/install.js
       - run: npm run rebuild:native
-      - run: node --test tests/updates.test.cjs tests/agent-catalog.test.cjs tests/schedules.test.cjs tests/system-prompts.test.cjs tests/release-readiness.test.cjs
+      - run: node --test tests/updates.test.cjs tests/agent-catalog.test.cjs tests/schedules.test.cjs tests/system-prompts.test.cjs tests/agent-status.test.cjs tests/release-readiness.test.cjs
       - run: npm run release:mac
       - run: mkdir -p test-results && node scripts/release-readiness-regression.mjs
         timeout-minutes: 5

@@ -16,6 +16,7 @@ const agentUsage=require('./agent-usage.cjs');
 const agentTranscripts=require('./agent-transcripts.cjs');
 const schedules=require('./schedules.cjs');
 const systemPrompts=require('./system-prompts.cjs');
+const agentStatus=require('./agent-status.cjs');
 const {inspectLegacy,retireLegacy}=require('./app-migration.cjs');
 const {taskText,defaultTitle,migrateTitle,applyTaskTitle,copyTitle,transcriptTitle}=require('./session-titles.cjs');
 const {pruneDeleted,findDeleted,forgetDeleted,archiveSession,replaceSession,deduplicateRecovered}=require('./session-history.cjs');
@@ -82,6 +83,14 @@ const draftWrites=new DraftBatch(store,pushState);
 const accountDir = accountId => { const a=store.state.accounts.find(a=>a.id===accountId);return a?.source==='existing' ? profileDiscovery.existingDirectory(a) : path.join(dataRoot,'accounts',accountId); };
 const accountExecutable = async account => account.source==='existing'&&account.command ? (path.isAbsolute(account.command)?account.command:path.join(os.homedir(),'.local/bin',account.command)) : executable();
 const telemetryDir = path.join(dataRoot, 'telemetry');
+// Claude CLI version per executable, read once; '' when it cannot be read, so version-gated settings are left out.
+const claudeVersions=new Map();
+async function claudeVersion(file,env){
+  let key=file;try{const stat=await fs.stat(file);key=file+':'+stat.mtimeMs;}catch{}
+  if(!claudeVersions.has(key))claudeVersions.set(key,exec(file,['--version'],{env,windowsHide:true,timeout:15000,maxBuffer:64*1024}).then(r=>/(\d+\.\d+\.\d+)/.exec(r.stdout)?.[1]||'',()=>''));
+  return claudeVersions.get(key);
+}
+const versionAtLeast=(version,minimum)=>{if(!version)return false;const a=version.split('.').map(Number),b=minimum.split('.').map(Number);for(let i=0;i<3;i++)if((a[i]||0)!==(b[i]||0))return (a[i]||0)>(b[i]||0);return true;};
 const argvString = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
 function cliEnv(configDirectory) {
   const env=cleanEnv(process.env,configDirectory);
@@ -112,6 +121,19 @@ async function agentCommand(cli,args,env){
   if(process.platform!=='win32'||/\.exe$/i.test(cli))return [cli,args];
   const direct=await platformTools.resolveCmdShim(cli,env);
   return direct?[direct.file,[...direct.args,...args]]:[process.env.ComSpec||'cmd.exe',['/d','/c',cli,...args]];
+}
+// Codex hook trust per Codex build: hooks/list is asked once, then the result is reused.
+const codexHookTrust=new Map();
+async function codexStatusArgs(cli,env,cwd){
+  const command=agentStatus.eventCommand(process.execPath,path.join(root,'scripts/claude-telemetry.cjs')),hookArgs=agentStatus.codexHookArgs(command);
+  let key=cli;try{key+=':'+(await fs.stat(cli)).mtimeMs;}catch{}
+  key+='\n'+command;
+  if(!codexHookTrust.has(key))codexHookTrust.set(key,agentCommand(cli,[...hookArgs,'app-server'],env).then(cmd=>agentStatus.listCodexHooks(cmd,env,cwd)).then(hooks=>agentStatus.ownCodexHooks(hooks,command),()=>[]));
+  const entries=await codexHookTrust.get(key);
+  // Without trust Codex would only list the hooks as needing review, so they are left out entirely.
+  if(!entries.length||!env.CODEX_HOME)return [];
+  try{await agentStatus.writeCodexTrust(env.CODEX_HOME,entries);}catch{return [];}
+  return hookArgs;
 }
 async function scanAgent(id){
   const agent=agentCatalog.agent(id);
@@ -406,8 +428,16 @@ async function startSession(input) {
       // Qoder hands its account balance to the status line; cmd.exe cannot carry this JSON safely.
       else if(acct.agentToolId==='qoder-cli'&&!viaCmd){
         env.ELECTRON_RUN_AS_NODE='1';env.ACCOUNTOR_ACCOUNT_PROVIDER='custom';env.ACCOUNTOR_RUN_ID=sessionId;env.ACCOUNTOR_TELEMETRY_DIR=telemetryDir;
-        cliArgs=['--settings',JSON.stringify({statusLine:platformTools.hookSettings(process.execPath,path.join(root,'scripts/claude-telemetry.cjs'),null).statusLine})];
+        const script=path.join(root,'scripts/claude-telemetry.cjs');
+        cliArgs=['--settings',JSON.stringify({statusLine:platformTools.hookSettings(process.execPath,script,null).statusLine,hooks:agentStatus.qoderHooks(process.execPath,script)})];
       }}
+    // Working / waiting status: each agent reports turns into the same event file as the Claude hooks.
+    let statusArgs=[];
+    if(kind==='agent'&&!viaCmd){
+      env.ACCOUNTOR_RUN_ID=sessionId;env.ACCOUNTOR_TELEMETRY_DIR=telemetryDir;
+      if(acct.agentToolId==='codex-cli')statusArgs=await codexStatusArgs(cli,env,cwd);
+      if(acct.agentToolId==='opencode')env.OPENCODE_CONFIG_CONTENT=agentStatus.mergeOpencodePlugin(env.OPENCODE_CONFIG_CONTENT,await agentStatus.opencodePlugin(path.join(dataRoot,'agent-status')));
+    }
     if(kind==='agent'&&input.headless){
       const headless=schedules.headlessArgs(acct.agentToolId,input.headless.prompt,input.headless.permission);
       cliArgs=acct.agentToolId==='qoder-cli'?[...cliArgs,...headless.args]:headless.args;
@@ -417,7 +447,7 @@ async function startSession(input) {
     let promptArgs=[];
     if(kind==='agent'){
       const plan=await systemPrompts.launchPlan(acct.agentToolId,systemPrompts.promptFor(store.state.settings.systemPrompts,acct.agentToolId),{file:promptFile,env,shim:viaCmd});
-      cliArgs=[...plan.before,...cliArgs,...plan.after];Object.assign(env,plan.env);promptArgs=[...plan.before,...plan.after];
+      cliArgs=[...statusArgs,...plan.before,...cliArgs,...plan.after];Object.assign(env,plan.env);promptArgs=[...plan.before,...plan.after];
     }
     const pathKey=process.platform==='win32'?'Path':'PATH';env[pathKey]=[path.dirname(cli),env[pathKey]].join(process.platform==='win32'?';':':');
     file=direct?.file||cli;args=[...(direct?.args||[]),...cliArgs];
@@ -437,7 +467,9 @@ async function startSession(input) {
       const settings = { hooks: {},...(backend==='embedded'?{tui:store.state.settings.terminalRenderer==='fullscreen'?'fullscreen':'default'}:{}),env:{...(backend==='embedded'&&store.state.settings.terminalRenderer!=='fullscreen'?{CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN:'1'}:{}),...platformTools.browserSettings(),...(acct.command==='claude-dp'?{ENABLE_TOOL_SEARCH:'false'}:{})} };
       const originalStatusLine=await configuredStatusLine(accountDir(acct.id));
       const telemetry=platformTools.hookSettings(process.execPath,telemetryScript,originalStatusLine);
-      for(const event of ['SessionStart','UserPromptSubmit','Stop','SessionEnd'])settings.hooks[event]=[{hooks:[telemetry.event]}];
+      // A turn that ends on an API error such as the usage limit fires StopFailure instead of Stop (Claude Code 2.1.78+).
+      const turnEnds=versionAtLeast(await claudeVersion(file,env),'2.1.78')?['Stop','StopFailure']:['Stop'];
+      for(const event of ['SessionStart','UserPromptSubmit',...turnEnds,'SessionEnd'])settings.hooks[event]=[{hooks:[telemetry.event]}];
       settings.statusLine=telemetry.statusLine;
       args = ['--no-chrome','--settings', JSON.stringify(settings)];
       if(acct.connection)args.push('--model',acct.connection.defaultModel);
@@ -467,7 +499,7 @@ async function startSession(input) {
       const runtime = { proc,history:new TerminalHistory(),pending:[],pendingSize:0,outputTimer:null,seq:0,timer:null };
       terminals.set(sessionId, runtime);
       if(kind==='login')runtime.timer=setInterval(()=>{void statusAccount(acct.id).catch(()=>{});},3000);
-      proc.onData(data=>appendTerminal(runtime,sessionId,data,notify));
+      proc.onData(data=>{runtime.lastOutput=Date.now();appendTerminal(runtime,sessionId,data,notify);});
       proc.onExit(async ({ exitCode }) => {
         flushTerminal(runtime,sessionId,notify);runtime.closed=true;runtime.closedAt=Date.now();runtime.history.shrink(128*1024);
         const closed=[...terminals.entries()].filter(([,t])=>t.closed).sort((a,b)=>a[1].closedAt-b[1].closedAt);for(const [oldId] of closed.slice(0,-8))terminals.delete(oldId);
@@ -951,17 +983,23 @@ async function pollTelemetry(sessionIds) {
   await store.update(s=>{
     for(const {id,type,data} of pending){
       const r=s.sessions.find(x=>x.id===id);if(!r||data.time<=(r[type+'Time']||0))continue;
-      r[type+'Time']=data.time;if(type==='event'&&data.titleHint)applyTaskTitle(r,data.titleHint);if(data.sessionId)r.claudeSessionId=data.sessionId;if(data.transcript)r.transcript=data.transcript;
+      r[type+'Time']=data.time;if(type==='event'&&data.titleHint)applyTaskTitle(r,data.titleHint);if(r.kind==='claude'&&data.sessionId)r.claudeSessionId=data.sessionId;if(r.kind==='claude'&&data.transcript)r.transcript=data.transcript;
       if(type==='usage'&&data.usage){const a=s.accounts.find(a=>a.id===r.accountId);if(a)a.usage={...data.usage,time:data.time};}
       if(type==='event'&&r.status!=='exited'){
         r.lastEvent=data.event;
         if(data.event==='SessionStart'&&['running','starting','external'].includes(r.status))r.status='idle';
         if(data.event==='UserPromptSubmit'){r.status='busy';r.hasSubmittedPrompt=true;}
-        if(data.event==='Stop'){r.status='idle';r.hasSubmittedPrompt=true;}
+        if(['Stop','StopFailure','Interrupt'].includes(data.event)){r.status='idle';r.hasSubmittedPrompt=true;}
         if(data.event==='SessionEnd')r.status='exited';
       }
     }
   });await refreshTitles([...new Set(pending.filter(p=>p.type==='event').map(p=>p.id))]);pushState();
+}
+
+async function settleQuietSessions(){
+  const quiet=agentStatus.quietSessions(store.state.sessions,terminals);
+  if(!quiet.length)return;
+  await store.update(s=>{for(const r of s.sessions)if(quiet.includes(r.id)&&r.status==='busy'){r.status='idle';r.lastEvent='Quiet';}});pushState();
 }
 
 async function createWindow() {
@@ -1018,7 +1056,7 @@ app.whenReady().then(async()=> {
     const lastUpdate=await updateInstall.consumeResult(updateDir);
     if(lastUpdate?.ok===false)void dialog.showMessageBox(win,{type:'warning',message:'上次更新没有完成',detail:'当前仍是旧版本，数据未受影响。'+(lastUpdate.reason==='permission'?'应用没有权限替换自身，请到系统设置允许，或从下载页手动安装。':'可在设置中重试，或从下载页手动安装。')});
     let polling=false;
-    setInterval(async()=>{if(polling)return;polling=true;try{await pollTelemetry();}finally{polling=false;}},2000).unref();
+    setInterval(async()=>{if(polling)return;polling=true;try{await pollTelemetry();await settleQuietSessions();}finally{polling=false;}},2000).unref();
   }catch(e){dialog.showErrorBox('启动失败',e.message);quitting=true;app.quit();}
 });
 app.on('activate',()=> { if(win)win.show(); });
