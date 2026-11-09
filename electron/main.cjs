@@ -1072,8 +1072,12 @@ app.on('before-quit',async e=> {
   try{await draftWrites.flush();}catch(error){checkingQuit=false;dialog.showErrorBox('草稿未保存',error.message);return;}
   if(pendingUpdate){try{await updateInstall.launchHelper({platform:process.platform,target:updateTarget().target,artifact:updater.artifact(),dir:updateDir,version:updater.state().latest});}catch(error){checkingQuit=false;pendingUpdate=false;dialog.showErrorBox('无法启动更新',error.message);return;}}
   quitting=true;
-  // Wait for the terminals to exit before quitting: tearing down a live ConPTY while the app exits crashes it on Windows (0xC0000409).
-  const live=[...terminals.values()].filter(t=>!t.closed);
-  await Promise.race([Promise.all(live.map(t=>new Promise(resolve=>{try{t.proc.onExit(()=>resolve());t.proc.kill();}catch{resolve();}}))),new Promise(resolve=>setTimeout(resolve,3000))]);
+  // Wait for the terminals to exit before quitting: tearing down a live ConPTY while the app exits crashes it on
+  // Windows (0xC0000409, 0xC0000005). node-pty reports the exit before its ConPTY threads finish, hence the extra pause.
+  const started=Date.now(),live=[...terminals.entries()].filter(([,t])=>!t.closed),exits={};
+  const allExited=Promise.all(live.map(([sid,t])=>new Promise(resolve=>{try{t.proc.onExit(()=>{exits[sid]=Date.now()-started;resolve();});t.proc.kill();}catch(error){exits[sid]='kill failed: '+error.message;resolve();}})));
+  const finished=await Promise.race([allExited.then(()=>true),new Promise(resolve=>setTimeout(()=>resolve(false),5000))]);
+  if(process.platform==='win32'&&live.length)await new Promise(resolve=>setTimeout(resolve,500));
+  if(process.env.ACCOUNTOR_QUIT_DIAGNOSTICS)try{await fs.writeFile(process.env.ACCOUNTOR_QUIT_DIAGNOSTICS,JSON.stringify({terminals:live.length,finished,exits,waitedMs:Date.now()-started}));}catch{}
   app.quit();
 });

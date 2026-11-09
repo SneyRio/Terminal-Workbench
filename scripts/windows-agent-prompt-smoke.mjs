@@ -31,7 +31,7 @@ const account=(id,tool)=>({id,agentToolId:tool,name:tool+' 测试',source:'manag
 await fs.mkdir(path.join(data,'accounts/oc/opencode/data/opencode'),{recursive:true});await fs.writeFile(path.join(data,'accounts/oc/opencode/data/opencode/auth.json'),'{"fixture":{}}');
 await fs.writeFile(path.join(data,'state.json'),JSON.stringify({onboarding:{completedAt:1},accounts:[account('cx','codex-cli'),account('qd','qoder-cli'),account('oc','opencode')],workspaces:[{id:'w',name:'提示词',projects:[{path:project,name:'project'}],backend:'embedded',accountId:'cx',rightOpen:false,rightWidth:360}],selectedWorkspace:'w',sessions:[],settings:{theme:'dark',systemPrompts:prompts},agentInstalls:{'codex-cli':installed(codex),'qoder-cli':installed(qoder),'opencode':installed(opencode)}}));
 
-const binary=process.env.ACCOUNTOR_EXECUTABLE||path.join(root,'release/builds.noindex/WbSpace-win32-x64/WbSpace.exe'),env={...process.env,ACCOUNTOR_DATA_DIR:data};delete env.ELECTRON_RUN_AS_NODE;
+const binary=process.env.ACCOUNTOR_EXECUTABLE||path.join(root,'release/builds.noindex/WbSpace-win32-x64/WbSpace.exe'),quitReport=path.join(dir,'quit.json'),env={...process.env,ACCOUNTOR_DATA_DIR:data,ACCOUNTOR_QUIT_DIAGNOSTICS:quitReport};delete env.ELECTRON_RUN_AS_NODE;
 const app=await electron.launch({executablePath:binary,args:[],env});
 const deadline=setTimeout(()=>{console.error('Windows prompt smoke timeout after: '+JSON.stringify(checks));app.process().kill();setTimeout(()=>process.exit(1),500);},150000);
 const lines=async()=>(await fs.readFile(dump,'utf8').catch(()=>'')).trim().split('\n').filter(Boolean).map(JSON.parse);
@@ -57,7 +57,7 @@ try{
  await fs.writeFile(path.join(reports,'windows-agent-prompts.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));
  await exitTestApp(app);
 }catch(error){
- const failure={passed:false,platform:process.platform,checks,error:String(error.message||error).slice(0,4000),launches:await lines().catch(()=>[]),sessions:await app.windows()[0]?.evaluate(async()=>(await window.accountor.invoke('state:get')).sessions.map(s=>({kind:s.kind,accountId:s.accountId,status:s.status,error:s.error,exitCode:s.exitCode}))).catch(e=>String(e))};
+ const failure={passed:false,platform:process.platform,checks,error:String(error.message||error).slice(0,1500),quit:await fs.readFile(quitReport,'utf8').then(JSON.parse).catch(e=>String(e.code||e)),launches:(await lines().catch(()=>[])).map(l=>({name:l.name,argc:l.argv.length})),sessions:await app.windows()[0]?.evaluate(async()=>(await window.accountor.invoke('state:get')).sessions.map(s=>({kind:s.kind,accountId:s.accountId,status:s.status,error:s.error,exitCode:s.exitCode}))).catch(e=>String(e))};
  await fs.writeFile(path.join(reports,'windows-agent-prompts.json'),JSON.stringify(failure,null,2));
  // Job logs need a signed-in viewer; an annotation shows the failure on the public run page.
  console.log('::error title=windows-agent-prompt-smoke::'+JSON.stringify(failure).slice(0,30000).replace(/%/g,'%25').replace(/\r/g,'%0D').replace(/\n/g,'%0A'));
