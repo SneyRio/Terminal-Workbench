@@ -116,4 +116,18 @@ function worktreeBranch(name,time=Date.now()){
  return `wbspace/${slug(name)}-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
-module.exports={opencodeFullPermission:opencodePermissions.full,parseCron,normalizeRule,nextRun,describeRule,normalizeTask,headlessArgs,mergeOpencodeConfig,quotaBlocked,worktreeBranch,PERMISSIONS};
+// Each task keeps one session in its workspace: the newest record carrying its id.
+function pinnedSession(sessions,scheduleId){
+ let best=null;
+ for(const r of sessions||[])if(r.scheduleId===scheduleId&&(!best||(r.createdAt||0)>=(best.createdAt||0)))best=r;
+ return best;
+}
+// A run continues the task's Claude conversation when it is the same account and directory and the transcript is
+// still on disk. Worktree runs start in a new directory every time, so they always start fresh.
+function continuation(pinned,{agentId,accountId,cwd,worktree,transcriptExists}){
+ if(!pinned||worktree||agentId!=='claude-code'||pinned.kind!=='claude')return null;
+ if(!pinned.claudeSessionId||pinned.accountId!==accountId||pinned.cwd!==cwd||!transcriptExists)return null;
+ return pinned.claudeSessionId;
+}
+
+module.exports={pinnedSession,continuation,opencodeFullPermission:opencodePermissions.full,parseCron,normalizeRule,nextRun,describeRule,normalizeTask,headlessArgs,mergeOpencodeConfig,quotaBlocked,worktreeBranch,PERMISSIONS};

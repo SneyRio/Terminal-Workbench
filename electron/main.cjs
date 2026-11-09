@@ -269,6 +269,9 @@ async function runSchedule(scheduleId,trigger){
   const tool=account.agentToolId||'claude-code';
   if(tool==='claude-code'||usesOfficialCli(account)){await statusAccount(account.id).catch(()=>{});if(store.account(account.id).status==='login')return skip('账号需要重新登录');}
   const blocked=schedules.quotaBlocked(store.account(account.id).usage);if(blocked)return skip(blocked);
+  // The task's fixed session: a run never takes it over while it is open (still running, or continued by the user).
+  const pinned=schedules.pinnedSession(store.state.sessions,task.id),pinnedRuntime=pinned&&terminals.get(pinned.id);
+  if(pinnedRuntime&&!pinnedRuntime.closed)return skip('定时任务的会话正在使用，结束该会话后才会继续定时运行');
   const project=workspace.projects[0]?.path;if(!project)return skip('工作空间没有项目');
   let cwd=project;
   if(task.worktree){
@@ -280,11 +283,14 @@ async function runSchedule(scheduleId,trigger){
     Object.assign(run,{repo,worktree,branch,base:await gitAt(worktree,['rev-parse','HEAD'])});
     cwd=path.join(worktree,path.relative(repo,await fs.realpath(project)));
   }
+  const resumeId=schedules.continuation(pinned,{agentId:tool,accountId:account.id,cwd:await fs.realpath(cwd).catch(()=>cwd),worktree:!!task.worktree,transcriptExists:!!pinned?.transcript&&existsSync(pinned.transcript)});
   await recordRun(run);
   try{
     const stamp=new Date(run.startedAt).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
-    const started=await startSession({workspaceId:workspace.id,accountId:account.id,kind:'claude',resumeCwd:cwd,headless:{prompt:task.prompt,permission:task.permission},title:'定时 · '+task.name+' · '+stamp,scheduleRunId:run.id});
-    await recordRun({id:run.id,scheduleId,sessionId:started.id});
+    const started=await startSession({workspaceId:workspace.id,accountId:account.id,kind:'claude',resumeCwd:cwd,headless:{prompt:task.prompt,permission:task.permission},title:'定时 · '+task.name+' · '+stamp,scheduleRunId:run.id,scheduleId:task.id,...(resumeId?{resumeId}:{}),...(pinned?{groupId:pinned.groupId,orientation:pinned.orientation}:{})});
+    // The new run takes the place of the previous one in the same tab.
+    if(pinned&&pinned.id!==started.id){await store.update(s=>{const next=s.sessions.find(r=>r.id===started.id);replaceSession(s,pinned.id,next);});terminals.delete(pinned.id);for(const name of ['event.json','usage.json','prompt.md','mcp.json'])await fs.rm(path.join(telemetryDir,pinned.id+'-'+name),{force:true}).catch(()=>{});pushState();}
+    await recordRun({id:run.id,scheduleId,sessionId:started.id,...(resumeId?{continued:true}:{})});
     runTimers.set(run.id,setTimeout(()=>{const t=terminals.get(started.id);void recordRun({id:run.id,scheduleId,timedOut:true});if(t&&!t.closed)try{t.proc.kill();}catch{}},task.timeoutMinutes*60000));
     return store.state.scheduleRuns.find(r=>r.id===run.id);
   }catch(e){
@@ -545,7 +551,7 @@ async function startSession(input) {
   try{await fs.access(file,1);}catch{throw new Error('终端可执行文件不存在或无执行权限：'+file);}
   const record = { id: sessionId, workspaceId: workspace?.id || '', accountId: acct?.id || '', kind, backend, cwd, projects, pendingRestore:input.restoreSourceId,checkpoint:input.resumeFile||input.checkpointFile, handoffFile:input.handoffFile||input.inheritedHandoffFile, title: kind === 'login' ? '登录 · ' + acct.name : kind === 'shell' ? 'Shell' : 'Claude · ' + acct.name, createdAt: Date.now(), status: 'starting', groupId: input.groupId || sessionId, orientation: input.orientation || 'horizontal', authVerified:acct?store.account(acct.id).status==='valid':false, recovery:input.handoffFile?'handoff':input.resumeId || input.resumeFile ? 'requested' : undefined };
   record.titleSource='default';record.titleToken=sessionId.replaceAll('-','').slice(-6).toUpperCase();record.title=defaultTitle(record);
-  if(input.title){record.title=String(input.title).slice(0,120);record.titleSource='manual';}if(input.scheduleRunId)record.scheduleRunId=input.scheduleRunId;
+  if(input.title){record.title=String(input.title).slice(0,120);record.titleSource='manual';}if(input.scheduleRunId)record.scheduleRunId=input.scheduleRunId;if(input.scheduleId)record.scheduleId=input.scheduleId;
   await store.update(s => { s.sessions.push(record); }); pushState();
   {
     try {
@@ -664,7 +670,7 @@ async function performRestore(sid,fromTrash){
     if(!ready)throw new Error('尚未确认 CLI 恢复就绪，原会话或删除记录已保留');
     await store.update(s=>{
       const target=s.sessions.find(r=>r.id===result.id);if(!target||['failed','exited'].includes(target.status))throw new Error('恢复进程已结束，原记录已保留');
-      copyTitle(source,target);target.groupId=source.groupId||target.groupId;target.orientation=source.orientation;target.createdAt=source.createdAt;target.restoredAt=Date.now();delete target.pendingRestore;
+      copyTitle(source,target);if(source.scheduleId)target.scheduleId=source.scheduleId;target.groupId=source.groupId||target.groupId;target.orientation=source.orientation;target.createdAt=source.createdAt;target.restoredAt=Date.now();delete target.pendingRestore;
       replaceSession(s,sid,target);if(fromTrash)forgetDeleted(s,sid);
       const w=s.workspaces.find(w=>w.id===source.workspaceId);if(w){s.selectedWorkspace=w.id;w.selectedSession=target.id;w.collapsed=false;w.hiddenGroups=(w.hiddenGroups||[]).filter(g=>g!==target.groupId);}
     });

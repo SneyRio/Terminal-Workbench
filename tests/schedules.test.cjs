@@ -41,3 +41,18 @@ test('a nearly exhausted account is skipped and branch names are safe',()=>{
  assert.match(s.quotaBlocked({seven_day:{used_percentage:96}}),/本周/);assert.match(s.quotaBlocked({credits:{exceeded:true}}),/Credits/);assert.equal(s.quotaBlocked(undefined),'');
  assert.equal(s.worktreeBranch('每日 Lint 检查!',at(2026,11,7,9,5)),'wbspace/lint-20261107-090500');assert.equal(s.worktreeBranch('中文',at(2026,1,2,3,4)),'wbspace/task-20260102-030400');
 });
+
+test('a task keeps one session and continues its Claude conversation only where that is safe',()=>{
+ const s=require('../electron/schedules.cjs');
+ const sessions=[{id:'a',scheduleId:'t',createdAt:1},{id:'b',scheduleId:'t',createdAt:3,kind:'claude',accountId:'acc',cwd:'/p',claudeSessionId:'c1'},{id:'c',scheduleId:'other',createdAt:9},{id:'d',createdAt:10}];
+ assert.equal(s.pinnedSession(sessions,'t').id,'b');assert.equal(s.pinnedSession(sessions,'none'),null);
+ const pinned=sessions[1],base={agentId:'claude-code',accountId:'acc',cwd:'/p',worktree:false,transcriptExists:true};
+ assert.equal(s.continuation(pinned,base),'c1');
+ assert.equal(s.continuation(null,base),null);
+ assert.equal(s.continuation(pinned,{...base,worktree:true}),null);
+ assert.equal(s.continuation(pinned,{...base,accountId:'other'}),null);
+ assert.equal(s.continuation(pinned,{...base,cwd:'/elsewhere'}),null);
+ assert.equal(s.continuation(pinned,{...base,transcriptExists:false}),null);
+ assert.equal(s.continuation(pinned,{...base,agentId:'codex-cli'}),null);
+ assert.equal(s.continuation({...pinned,claudeSessionId:undefined},base),null);
+});
