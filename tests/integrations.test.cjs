@@ -60,21 +60,24 @@ test('the secret store keeps MCP values encrypted on disk',async()=>{
 });
 
 test('command-line tools are found, merged and described for the agent',async()=>{
- const dir=await fs.mkdtemp(path.join(os.tmpdir(),'wb-cli-'));
- try{
-  for(const n of ['gh','jq'])await fs.writeFile(path.join(dir,n),'',{mode:0o755});
-  await fs.writeFile(path.join(dir,'rg'),'',{mode:0o644});
-  const found=await ig.scanCli(['/nonexistent',dir],{platform:'darwin'});
-  assert.deepEqual(found.map(f=>f.command),['gh','jq']);
-  const merged=ig.mergeScannedTools([{id:'x',command:'gh',path:'',description:'mine',enabled:true,agents:[],source:'manual'}],found);
-  assert.deepEqual(merged.added,['jq']);assert.equal(merged.tools[0].path,path.join(dir,'gh'));assert.equal(merged.tools[0].description,'mine');assert.equal(merged.tools[1].enabled,false);
-  const tools=ig.normalizeTools([...merged.tools,{command:'devops-token',path:'/Users/me/.local/bin/devops-token',description:'取 DevOps 令牌',enabled:true,agents:['codex-cli']}]);
-  const forClaude=ig.cliLaunch(tools,'claude-code','darwin'),forCodex=ig.cliLaunch(tools,'codex-cli','darwin');
-  assert.deepEqual(forClaude.dirs,[dir]);assert.match(forClaude.prompt,/- gh（.*gh）：mine/);assert.doesNotMatch(forClaude.prompt,/jq|devops/);
-  assert.deepEqual(forCodex.dirs,[dir,'/Users/me/.local/bin']);assert.match(forCodex.prompt,/devops-token/);
-  assert.deepEqual(ig.cliLaunch([],'opencode'),{dirs:[],prompt:''});
-  assert.throws(()=>ig.normalizeTools([{command:'a b'}]),/命令名/);assert.throws(()=>ig.normalizeTools([{command:'a',path:'rel/a'}]),/绝对路径/);
- }finally{await fs.rm(dir,{recursive:true,force:true});}
+ // Executable bits do not exist on Windows, so the file system is simulated: rg is present but not executable.
+ const dir='/opt/wb-cli',executable=new Set(['/opt/wb-cli/gh','/opt/wb-cli/jq']);
+ const access=async(file,mode)=>{if(mode!==1)throw new Error('mode');if(!executable.has(file))throw Object.assign(new Error('EACCES'),{code:'EACCES'});};
+ const found=await ig.scanCli(['/nonexistent',dir],{platform:'darwin',access});
+ assert.deepEqual(found.map(f=>f.command),['gh','jq']);
+ const merged=ig.mergeScannedTools([{id:'x',command:'gh',path:'',description:'mine',enabled:true,agents:[],source:'manual'}],found);
+ assert.deepEqual(merged.added,['jq']);assert.equal(merged.tools[0].path,'/opt/wb-cli/gh');assert.equal(merged.tools[0].description,'mine');assert.equal(merged.tools[1].enabled,false);
+ const tools=ig.normalizeTools([...merged.tools,{command:'devops-token',path:'/Users/me/.local/bin/devops-token',description:'取 DevOps 令牌',enabled:true,agents:['codex-cli']}]);
+ const forClaude=ig.cliLaunch(tools,'claude-code','darwin'),forCodex=ig.cliLaunch(tools,'codex-cli','darwin');
+ assert.deepEqual(forClaude.dirs,[dir]);assert.match(forClaude.prompt,/- gh（.*gh）：mine/);assert.doesNotMatch(forClaude.prompt,/jq|devops/);
+ assert.deepEqual(forCodex.dirs,[dir,'/Users/me/.local/bin']);assert.match(forCodex.prompt,/devops-token/);
+ assert.deepEqual(ig.cliLaunch([],'opencode'),{dirs:[],prompt:''});
+ assert.throws(()=>ig.normalizeTools([{command:'a b'}]),/命令名/);assert.throws(()=>ig.normalizeTools([{command:'a',path:'rel/a'}]),/绝对路径/);
+});
+test('Windows tool lookup tries .exe, .cmd and .bat without an executable bit',async()=>{
+ const seen=[],access=async(file,mode)=>{seen.push([file,mode]);if(file!=='C:\\tools\\gh.cmd')throw new Error('ENOENT');};
+ assert.equal(await ig.findOnPath('gh',['C:\\tools'],{platform:'win32',access}),'C:\\tools\\gh.cmd');
+ assert.deepEqual(seen,[['C:\\tools\\gh.exe',undefined],['C:\\tools\\gh.cmd',undefined]]);
 });
 
 test('${VAR} references are expanded for every agent from the session environment',async()=>{
