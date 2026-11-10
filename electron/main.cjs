@@ -563,10 +563,13 @@ async function startSession(input) {
       proc.onExit(async ({ exitCode }) => {
         flushTerminal(runtime,sessionId,notify);runtime.closed=true;runtime.closedAt=Date.now();runtime.history.shrink(128*1024);
         const closed=[...terminals.entries()].filter(([,t])=>t.closed).sort((a,b)=>a[1].closedAt-b[1].closedAt);for(const [oldId] of closed.slice(0,-8))terminals.delete(oldId);
+        // Ended by quitting or updating the app, not by the user: keep it in the list so it can be restored.
+        const stopping=quitting;
         if(acct)await pollTelemetry([sessionId]).catch(()=>{});
         clearInterval(runtime.timer);
-        await store.update(s => { const r = s.sessions.find(s => s.id === sessionId); if (r) { r.status = 'exited'; r.exitCode = exitCode; } });
+        await store.update(s => { const r = s.sessions.find(s => s.id === sessionId); if (r) { r.status = stopping&&r.status!=='exited'?'interrupted':'exited'; r.exitCode = exitCode; } });
         notify('terminal:exit', { id: sessionId, exitCode }); pushState();
+        if(stopping)return;
         void finishScheduledRun(sessionId,exitCode).catch(()=>{});
         if (acct) await statusAccount(acct.id).catch(()=>{});
       });
@@ -1155,6 +1158,7 @@ app.on('before-quit',async e=> {
   const allExited=Promise.all(live.map(([sid,t])=>new Promise(resolve=>{try{t.proc.onExit(()=>{exits[sid]=Date.now()-started;resolve();});t.proc.kill();}catch(error){exits[sid]='kill failed: '+error.message;resolve();}})));
   const finished=await Promise.race([allExited.then(()=>true),new Promise(resolve=>setTimeout(()=>resolve(false),5000))]);
   if(process.platform==='win32'&&live.length)await new Promise(resolve=>setTimeout(resolve,500));
+  try{await store.queue;}catch{}
   if(process.env.ACCOUNTOR_QUIT_DIAGNOSTICS)try{await fs.writeFile(process.env.ACCOUNTOR_QUIT_DIAGNOSTICS,JSON.stringify({terminals:live.length,finished,exits,waitedMs:Date.now()-started}));}catch{}
   app.quit();
 });
