@@ -1,10 +1,11 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
 import { ArrowUp, CaretDown, CaretRight, ChatTeardropDots, CheckCircle, Circle, CircleNotch, Lightning, SidebarSimple, ShieldCheck, Stop, WarningCircle, X, XCircle } from '@phosphor-icons/react';
 import { call } from './api';
-import type { Session } from './types';
+import type { Account, Session } from './types';
 
 // ---- Conversation model, rebuilt from the CLI's stream-json events -------------------------------
 
@@ -296,9 +297,49 @@ const MODES = [{ id: 'auto', label: '自动' }, { id: 'plan', label: '计划' },
 const OTHER_MODES: Record<string, string> = { default: '逐项确认', acceptEdits: '自动接受编辑', dontAsk: '不询问' };
 const MODELS = ['default', 'opus', 'sonnet', 'haiku', 'fable', 'opus[1m]', 'sonnet[1m]'];
 
+interface PickerOption { id: string; label: string }
+// The OS dropdown ignores the app theme and covers the composer, so the toolbar draws its own list.
+function Picker({ label, title, value, options, onSelect }: { label: string; title?: string; value: string; options: PickerOption[]; onSelect: (id: string) => void }) {
+  const [open, setOpen] = useState(false), [active, setActive] = useState(0);
+  const wrap = useRef<HTMLDivElement>(null);
+  const listId = useMemo(() => 'pick-' + Math.random().toString(36).slice(2, 9), []);
+  const current = options.find(o => o.id === value) || options[0];
+  const selected = Math.max(0, options.findIndex(o => o.id === value));
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: PointerEvent) => { if (!wrap.current?.contains(e.target as Node)) setOpen(false); };
+    window.addEventListener('pointerdown', close, true);
+    return () => window.removeEventListener('pointerdown', close, true);
+  }, [open]);
+  const show = () => { setActive(selected); setOpen(true); };
+  const pick = (i: number) => { onSelect(options[i].id); setOpen(false); };
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (e.nativeEvent.isComposing) return;
+    if (!open) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); show(); }
+      return;
+    }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive(i => (i + 1) % options.length); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(i => (i - 1 + options.length) % options.length); }
+    else if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); setActive(e.key === 'Home' ? 0 : options.length - 1); }
+    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(active); }
+    // Esc closes only this list: the pane would otherwise interrupt the running turn.
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setOpen(false); }
+    else if (e.key === 'Tab') setOpen(false);
+  };
+  return <div className="chat-picker" ref={wrap}>
+    <button type="button" className="chat-picker-trigger" role="combobox" aria-label={label} aria-expanded={open} aria-controls={listId} aria-activedescendant={open && options[active] ? listId + '-' + active : undefined} title={title} onClick={() => (open ? setOpen(false) : show())} onKeyDown={onKeyDown}>
+      <span>{current?.label}</span><CaretDown size={10} weight="bold"/>
+    </button>
+    {open && <div className="chat-picker-menu" role="listbox" id={listId} aria-label={label}>
+      {options.map((o, i) => <button type="button" key={o.id} id={listId + '-' + i} role="option" tabIndex={-1} aria-selected={o.id === value} className={'chat-picker-option' + (o.id === value ? ' selected' : '') + (i === active ? ' active' : '')} onMouseEnter={() => setActive(i)} onMouseDown={e => e.preventDefault()} onClick={() => pick(i)}>{o.label}</button>)}
+    </div>}
+  </div>;
+}
+
 const SEND_NOW_KEY = /Mac/i.test(navigator.platform) ? '⌘Enter' : 'Ctrl+Enter';
 
-export function ChatPane({ session, active, yolo, onFocus, onResume, onError }: { session: Session; active: boolean; yolo: boolean; onFocus: () => void; onResume: () => void; onError: (e: unknown) => void }) {
+export function ChatPane({ session, account, active, yolo, onFocus, onResume, onError }: { session: Session; account?: Account; active: boolean; yolo: boolean; onFocus: () => void; onResume: () => void; onError: (e: unknown) => void }) {
   const [events, setEvents] = useState<Ev[]>([]);
   const [closed, setClosed] = useState(true);
   const [live, setLive] = useState('');
@@ -413,6 +454,15 @@ export function ChatPane({ session, active, yolo, onFocus, onResume, onError }: 
   });
 
   const currentMode = modeOverride || mode;
+  const configuredModels = account?.provider === 'custom' ? (account.connection?.models || []).filter(Boolean) : [];
+  const pickedModel = modelOverride || picked;
+  // A custom connection only runs the models configured on the account; the built-in names mean nothing there.
+  // Before any switch the CLI runs the connection's default model, so that is what the picker should show.
+  const modelValue = configuredModels.length && pickedModel === 'default' ? (account?.connection?.defaultModel || configuredModels[0]) : pickedModel;
+  const modelIds = [...new Set(configuredModels.length ? configuredModels : MODELS)];
+  if (modelValue && !modelIds.includes(modelValue)) modelIds.push(modelValue);
+  const modelOptions = modelIds.map(m => ({ id: m, label: m === 'default' ? '默认模型' : m }));
+  const modeOptions = [...MODES, ...(MODES.some(m => m.id === currentMode) ? [] : [{ id: currentMode, label: OTHER_MODES[currentMode] || currentMode }])];
   useEffect(() => setModeOverride(''), [mode]);
   useEffect(() => setModelOverride(''), [picked]);
   const detailItem = detail ? findTool(items, detail) : undefined;
@@ -460,8 +510,8 @@ export function ChatPane({ session, active, yolo, onFocus, onResume, onError }: 
           if (e.key === 'Escape' && busy) { e.preventDefault(); void call('chat:interrupt', session.id).catch(onError); }
         }}/>
       <div className="chat-toolbar">
-        <select aria-label="权限模式" value={currentMode} onChange={e => { setModeOverride(e.target.value); void control({ subtype: 'set_permission_mode', mode: e.target.value }); }}>{MODES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}{!MODES.some(m => m.id === currentMode) && <option value={currentMode}>{OTHER_MODES[currentMode] || currentMode}</option>}</select>
-        <select aria-label="模型" title={model ? '当前使用：' + model : undefined} value={modelOverride || picked} onChange={e => { setModelOverride(e.target.value); void control({ subtype: 'set_model', model: e.target.value }); }}>{[...MODELS, ...(MODELS.includes(modelOverride || picked) ? [] : [modelOverride || picked])].map(m => <option key={m} value={m}>{m === 'default' ? '默认模型' : m}</option>)}</select>
+        <Picker label="权限模式" value={currentMode} options={modeOptions} onSelect={m => { setModeOverride(m); void control({ subtype: 'set_permission_mode', mode: m }); }}/>
+        <Picker label="模型" title={model ? '当前使用：' + model : undefined} value={modelValue} options={modelOptions} onSelect={m => { setModelOverride(m); void control({ subtype: 'set_model', model: m }); }}/>
         <span className="spacer"/>
         {busy && <button className="secondary chat-stop" title="中断（Esc）" onClick={() => void call('chat:interrupt', session.id).catch(onError)}><Stop size={13} weight="fill"/>中断</button>}
         {busy && (text.trim() || attachments.length > 0) && !/^\/btw(\s|$)/.test(text.trim()) ? <button className="secondary chat-send-now" title={'打断当前任务并立即发送（' + SEND_NOW_KEY + '）'} onClick={() => void send(true)}><Lightning size={13} weight="fill"/>立即发送</button> : null}

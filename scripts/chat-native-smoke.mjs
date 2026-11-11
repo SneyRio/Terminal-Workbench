@@ -39,11 +39,10 @@ try{
     await expect(page.locator('.chat-pane')).toBeVisible({timeout:60000});
     await expect.poll(async()=>{const s=await latest();return s.view==='chat'&&!!s.claudeSessionId;},{timeout:60000}).toBeTruthy();
     session=await latest();
-    const picker=page.locator('.chat-toolbar select[aria-label="模型"]');
-    await expect(picker).toHaveValue('default');
-    await expect(picker.locator('option:checked')).toHaveText('默认模型');
+    const picker=page.locator('.chat-toolbar [role=combobox][aria-label="模型"]');
+    await expect(picker).toContainText('默认模型');
     await page.evaluate(sid=>window.accountor.invoke('chat:control',sid,{subtype:'set_model',model:'haiku'}),session.id);
-    await expect(picker).toHaveValue('haiku');
+    await expect(picker).toContainText('haiku');
   });
   const composer=page.locator('.chat-composer textarea');
   await step('CLAUDE.md is loaded and the reply streams in',async()=>{
@@ -85,8 +84,12 @@ try{
   await step('a Bash permission card waits for the user, then runs',async()=>{
     // The user's own settings may default to auto mode; ask for every tool here so a card must appear.
     // The picker offers auto, plan and YOLO; ask-for-everything is set directly so a card must appear.
-    await expect(page.locator('.chat-toolbar select[aria-label="权限模式"]')).toHaveValue('auto');
-    expect(await page.locator('.chat-toolbar select[aria-label="权限模式"] option').allTextContents()).toEqual(['自动','计划','YOLO']);
+    const modePicker=page.locator('.chat-toolbar [role=combobox][aria-label="权限模式"]');
+    await expect(modePicker).toContainText('自动');
+    await modePicker.click();
+    expect(await page.locator('.chat-picker-menu [role=option]').allTextContents()).toEqual(['自动','计划','YOLO']);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.chat-picker-menu')).toHaveCount(0);
     await page.evaluate(sid=>window.accountor.invoke('chat:control',sid,{subtype:'set_permission_mode',mode:'default'}),session.id);
     await composer.fill('用 Bash 执行 echo chat-ok > chat.txt，不要用其他工具，完成后只回复“好了”。');await composer.press('Enter');
     const card=page.locator('.chat-permission:not(.resolved)');
@@ -173,11 +176,11 @@ try{
     const back=(await page.evaluate(()=>window.accountor.invoke('state:get'))).sessions.find(r=>r.claudeSessionId===claudeSessionId);
     expect(back.view).toBe('chat');
     // The picked model carries over to the resumed process.
-    await expect(page.locator('.chat-toolbar select[aria-label="模型"]')).toHaveValue('haiku',{timeout:30000});
+    await expect(page.locator('.chat-toolbar [role=combobox][aria-label="模型"]')).toContainText('haiku',{timeout:30000});
     await composer.fill('暗号再说一次，只回答暗号。');await composer.press('Enter');
     await expect(page.locator('.chat-assistant').filter({hasText:'PINEAPPLE-42'})).toHaveCount(2,{timeout:90000});
     // The CLI reports the model it actually used with the turn.
-    await expect(page.locator('.chat-toolbar select[aria-label="模型"]')).toHaveAttribute('title',/haiku/);
+    await expect(page.locator('.chat-toolbar [role=combobox][aria-label="模型"]')).toHaveAttribute('title',/haiku/);
     await page.screenshot({path:path.join(shots,'5-back-to-chat.png')});
     await page.emulateMedia({colorScheme:'dark'});
     await composer.fill('草稿');

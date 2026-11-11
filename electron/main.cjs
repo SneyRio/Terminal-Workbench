@@ -182,16 +182,43 @@ async function scanAgent(id){
   notify('agents:state',await agentList());
   return result;
 }
-const usageRefreshed=new Map();
+const usageRefreshed=new Map(),usageReads=new Map();
+// `/usage` runs locally in print mode: no model request, no transcript, no MCP servers or user hooks.
+const CLAUDE_USAGE_ARGS=['-p','/usage','--output-format','json','--no-session-persistence','--strict-mcp-config','--setting-sources',''];
+const claudeSubscription=account=>(account.agentToolId||'claude-code')==='claude-code'&&!account.connection&&account.authMethod==='claude.ai';
+async function readClaudeUsage(cli,env,cwd){
+  const {stdout}=await exec(cli,CLAUDE_USAGE_ARGS,{env,cwd,windowsHide:true,timeout:30000,maxBuffer:1024*1024});
+  return agentUsage.parseClaudeUsage(JSON.parse(stdout).result);
+}
 // Runs in the background so a slow usage service never delays a status check or a session start.
+// A forced read (the refresh button) joins one already running instead of starting another.
 async function refreshOfficialUsage(account,cli,env,force=false){
-  const reader=account.agentToolId==='codex-cli'?async()=>agentUsage.readCodexUsage(cli,env,{command:await agentCommand(cli,['app-server'],env)}):account.agentToolId==='opencode'?async()=>{const [file,args]=await agentCommand(cli,['stats'],env);const {stdout}=await exec(file,args,{env,windowsHide:true,timeout:20000,maxBuffer:1024*1024});return agentUsage.parseOpencodeStats(stdout);}:null;
-  if(!reader)return;
-  if(!force&&Date.now()-(usageRefreshed.get(account.id)||0)<30000)return;
+  const running=usageReads.get(account.id);if(running)return running;
+  const claude=claudeSubscription(account);
+  // Claude sessions report usage through the status line, so automatic reads stay rare.
+  if(!force&&Date.now()-(usageRefreshed.get(account.id)||0)<(claude?5*60000:30000))return;
+  const read=readOfficialUsage(account,cli,env,claude).finally(()=>usageReads.delete(account.id));
+  usageReads.set(account.id,read);return read;
+}
+async function readOfficialUsage(account,cli,env,claude){
+  const reader=claude?()=>readClaudeUsage(cli,env,os.tmpdir()):account.agentToolId==='codex-cli'?async()=>agentUsage.readCodexUsage(cli,env,{command:await agentCommand(cli,['app-server'],env)}):account.agentToolId==='opencode'?async()=>{const [file,args]=await agentCommand(cli,['stats'],env);const {stdout}=await exec(file,args,{env,windowsHide:true,timeout:20000,maxBuffer:1024*1024});return agentUsage.parseOpencodeStats(stdout);}:null;
+  if(!reader)return false;
   usageRefreshed.set(account.id,Date.now());
   const usage=await reader().catch(()=>null);
-  if(!usage)return;
-  await store.update(s=>{const a=s.accounts.find(a=>a.id===account.id);if(a)a.usage={...usage,time:Date.now()};});pushState();
+  if(!usage)return false;
+  await store.update(s=>{const a=s.accounts.find(a=>a.id===account.id);if(a)a.usage={...(claude?a.usage:{}),...usage,time:Date.now()};});pushState();
+  return true;
+}
+// The refresh button: sign-in status first, then the usage the official CLI reports right now.
+async function refreshAccount(accountId){
+  const account=await statusAccount(accountId);
+  if(account?.status!=='valid'||account.connection)return {...account,usageUpdated:false};
+  let updated=false;
+  try{
+    if(claudeSubscription(account))updated=await refreshOfficialUsage(account,await accountExecutable(account),cliEnv(accountDir(account.id)),true);
+    else if(usesOfficialCli(account)){const cli=await agentExecutable(account.agentToolId);updated=await refreshOfficialUsage(account,cli,(await officialEnv(account,cli)).env,true);}
+  }catch{/* Usage stays as last known; the sign-in result still stands. */}
+  return {...store.account(accountId),usageUpdated:!!updated};
 }
 const usesOfficialCli=account=>(account?.agentToolId||'claude-code')!=='claude-code'&&!account.connection;
 // Applies one account's isolated sign-in; inherited credentials would otherwise take precedence over it.
@@ -372,6 +399,8 @@ async function checkAccount(accountId) {
     const data = JSON.parse(stdout);
     if(typeof data.loggedIn!=='boolean')throw new Error('Invalid auth status');
       await store.update(s => { const a=s.accounts.find(a => a.id === accountId);if(!a)return;const identity=data.accountId||data.accountUuid||(data.email?data.email.toLowerCase()+'|'+(data.orgId||''):'');Object.assign(a,{status:data.loggedIn?'valid':'login',email:data.email||'',authMethod:data.authMethod,identity,duplicateOf:identity?s.accounts.find(other=>other.id!==accountId&&other.identity===identity)?.id:undefined,checkedAt:Date.now(),error:''}); });
+      const checked=store.account(accountId);
+      if(checked.status==='valid'&&claudeSubscription(checked))void refreshOfficialUsage(checked,await accountExecutable(checked),cliEnv(accountDir(accountId))).catch(()=>{});
   } catch (e) {
     let data;
     try { data = JSON.parse(e.stdout); } catch {}
@@ -877,7 +906,7 @@ function registerHandlers() {
     pushState();return store.account(accountId);
     }finally{configuringAccounts.delete(accountId);}
   });
-  register('account:status', statusAccount);
+  register('account:status', refreshAccount);
   register('account:rename',async(accountId,name)=>{store.account(accountId);if(!name?.trim())throw new Error('账号别名不能为空');await store.update(s=>{s.accounts.find(a=>a.id===accountId).name=name.trim().slice(0,80);});pushState();});
   register('terminal:rename',async(sid,title)=>{if(!title?.trim())throw new Error('会话名称不能为空');await store.update(s=>{const r=s.sessions.find(s=>s.id===sid);if(!r)throw new Error('会话不存在');r.title=title.trim().slice(0,100);r.titleSource='manual';});pushState();});
   register('account:discover',()=>profileDiscovery.discover());
