@@ -27,7 +27,12 @@ class Store {
     pruneDeleted(this.state);migrateEmbedded(this.state);ensureWorkspaceOrder(this.state);for(const account of this.state.accounts){account.agentToolId||='claude-code';if(account.connection&&!account.connection.protocol)account.connection.protocol=require('./agent-catalog.cjs').protocolOf(account.connection);}
     return this.state;
   }
+  // Waits until no write is queued, including writes queued while waiting.
+  async drain() { let queued; do { queued = this.queue; await queued; } while (queued !== this.queue); }
+  // After quitting starts nothing may begin a write the exit could cut short.
+  close() { this.closed = true; }
   async update(fn) {
+    if (this.closed) throw new Error('应用正在退出，状态不再写入');
     const op = this.queue.then(async () => {
       const next = structuredClone(this.state);
       const result = await fn(next);

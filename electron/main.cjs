@@ -22,6 +22,7 @@ const {CHAT_ARGS,CHAT_MODES,ChatRuntime,killTree,transcriptEvents}=require('./ch
 const {inspectLegacy,retireLegacy}=require('./app-migration.cjs');
 const {taskText,defaultTitle,migrateTitle,applyTaskTitle,copyTitle,transcriptTitle}=require('./session-titles.cjs');
 const {pruneDeleted,findDeleted,forgetDeleted,archiveSession,replaceSession,deduplicateRecovered}=require('./session-history.cjs');
+const {latestTranscript}=require('./transcript-chain.cjs');
 const restoringJobs=new Map(),deletingSessions=new Set();
 const {BUILTIN_HUD,inheritedStatusLine,prepareBuiltinHud}=require('./statusline.cjs');
 const {DraftBatch,TerminalHistory,appendTerminal,flushTerminal}=require('./performance.cjs');
@@ -383,9 +384,9 @@ async function checkAccount(accountId) {
 
 async function sourceTranscript(source){
   if(source.transcript){
-    try{const real=await fs.realpath(source.transcript),allowed=await fs.realpath(path.join(accountDir(source.accountId),'projects'));if(!inside(allowed,real))throw new Error('会话记录不在账号项目范围内');return real;}catch(e){if(e.code!=='ENOENT')throw e;}
+    try{const real=await fs.realpath(source.transcript),allowed=await fs.realpath(path.join(accountDir(source.accountId),'projects'));if(!inside(allowed,real))throw new Error('会话记录不在账号项目范围内');return (await conversationHead(source.accountId,real))?.transcript||real;}catch(e){if(e.code!=='ENOENT')throw e;}
   }
-  if(source.checkpoint){const real=await fs.realpath(source.checkpoint);if(inside(path.join(dataRoot,'checkpoints'),real))return real;}
+  if(source.checkpoint){const real=await fs.realpath(source.checkpoint);if(inside(path.join(dataRoot,'checkpoints'),real))return (await conversationHead(source.accountId,real))?.transcript||real;}
   throw new Error('尚无可恢复的会话记录，请先完成一个回合或新建目标账号的会话');
 }
 
@@ -640,6 +641,28 @@ async function findTranscript(accountId,claudeSessionId){
   return null;
 }
 
+// Where a Claude conversation is written now, if the CLI continued it in another session (continued-in rows);
+// null when it has not moved. Only transcripts inside the account's own projects folder are followed.
+async function conversationHead(accountId,file){
+  try{
+    if(!file)return null;
+    const head=await latestTranscript(file,{find:next=>findTranscript(accountId,next)});
+    if(!head.sessionId)return null;
+    const [real,root]=await Promise.all([fs.realpath(head.file),fs.realpath(path.join(accountDir(accountId),'projects'))]);
+    return inside(root,real)?{sessionId:head.sessionId,transcript:real,chain:head.chain}:null;
+  }catch{return null;}
+}
+
+// Records saved before continued-in rows were followed may still point at a transcript the conversation left;
+// resuming those would bring back the conversation as it was before it moved.
+async function healConversationHeads(){
+  const records=s=>[...s.sessions,...(s.deletedWorkspaces||[]).flatMap(g=>g.sessions.map(row=>row.session))].filter(r=>r.kind==='claude'&&r.transcript);
+  const heads=new Map();
+  for(const r of records(store.state)){const head=await conversationHead(r.accountId,r.transcript);if(head&&head.sessionId!==r.claudeSessionId)heads.set(r.id,head);}
+  if(!heads.size)return;
+  await store.update(s=>{for(const r of records(s)){const head=heads.get(r.id);if(head)Object.assign(r,{claudeSessionId:head.sessionId,transcript:head.transcript});}});
+}
+
 async function chatHistory(acct,input){
   const file=input.resumeFile||(input.resumeId&&await findTranscript(acct.id,input.resumeId));
   if(!file)return [];
@@ -741,9 +764,10 @@ async function performRestore(sid,fromTrash,options={}){
     }
   if(source.kind==='claude'&&!source.claudeSessionId)throw new Error('未取得精确的 Claude 会话 ID，不能猜测恢复；删除记录将保留，可检查原 CLI 历史后重试');
     // A conversation with no message yet has nothing to resume: start it again in place.
-    let restore=options.fresh?{}:{resumeId:source.claudeSessionId};
+    const head=source.kind==='claude'&&!options.fresh?await conversationHead(source.accountId,source.transcript&&existsSync(source.transcript)?source.transcript:source.checkpoint):null;
+    let restore=options.fresh?{}:{resumeId:head?.sessionId||source.claudeSessionId};
     if(source.kind==='claude'&&source.checkpoint&&!options.fresh){
-      const actual=await fs.access(source.transcript||'').then(()=>true).catch(()=>false);
+      const actual=await fs.access(head?.transcript||source.transcript||'').then(()=>true).catch(()=>false);
       if(!actual)restore=source.handoffFile?{handoffFile:source.handoffFile,checkpointFile:source.checkpoint}:{resumeFile:await sourceTranscript(source)};
     }
     result=await startSession({workspaceId:source.workspaceId,accountId:source.accountId,kind:source.kind,resumeCwd:source.cwd,resumeProjects:source.projects,resumeBackend:source.backend,view:options.view||source.view||'terminal',chatMode:source.chatMode,chatModel:source.chatModel,checkpointFile:source.checkpoint,...restore,inheritedHandoffFile:source.handoffFile,restoreSourceId:sid});
@@ -754,7 +778,8 @@ async function performRestore(sid,fromTrash,options={}){
       const target=store.state.sessions.find(s=>s.id===result.id);
       if(!target||['exited','failed'].includes(target.status))throw new Error('恢复进程启动失败，原会话或删除记录已保留');
       if(source.kind!=='claude'||target.claudeSessionId&&['idle','busy'].includes(target.status)){
-        if(source.kind==='claude'&&restore.resumeId&&target.claudeSessionId!==restore.resumeId)throw new Error('CLI 未恢复指定的会话，原记录已保留');
+        // The CLI may already have carried the resumed conversation on in a new session.
+        if(source.kind==='claude'&&restore.resumeId&&target.claudeSessionId!==restore.resumeId&&!(await conversationHead(source.accountId,await findTranscript(source.accountId,restore.resumeId)))?.chain.includes(target.claudeSessionId))throw new Error('CLI 未恢复指定的会话，原记录已保留');
         ready=target;break;
       }
       await new Promise(r=>setTimeout(r,200));
@@ -1216,6 +1241,13 @@ async function pollTelemetry(sessionIds) {
     try{const data=JSON.parse(await fs.readFile(path.join(telemetryDir,record.id+'-'+type+'.json'),'utf8'));return data.time>(record[type+'Time']||0)?{id:record.id,type,data}:null;}catch{return null;}
   })))).filter(Boolean);
   if(!pending.length)return;
+  // The resumed CLI still reports the session it left (SessionEnd on quit): keep the record on the newest one.
+  for(const item of pending){
+    const r=store.state.sessions.find(x=>x.id===item.id);
+    if(r?.kind!=='claude'||!item.data.transcript)continue;
+    const head=await conversationHead(r.accountId,item.data.transcript);
+    if(head)item.data={...item.data,sessionId:head.sessionId,transcript:head.transcript};
+  }
   await store.update(s=>{
     for(const {id,type,data} of pending){
       const r=s.sessions.find(x=>x.id===id);if(!r||data.time<=(r[type+'Time']||0))continue;
@@ -1286,6 +1318,7 @@ app.whenReady().then(async()=> {
       }
     });
     await store.update(s=>{ for(const r of s.sessions)if(['running','idle','busy','starting','external'].includes(r.status)){r.status='interrupted';} });
+    await healConversationHeads().catch(()=>{});
     await refreshTitles();
     registerHandlers();
     setInterval(()=>{void expireDeleted().catch(()=>{});},60000).unref();
@@ -1323,7 +1356,9 @@ app.on('before-quit',async e=> {
   const allExited=Promise.all(live.map(([sid,t])=>new Promise(resolve=>{try{t.proc.onExit(()=>{exits[sid]=Date.now()-started;resolve(t.exiting);});t.proc.kill();}catch(error){exits[sid]='kill failed: '+error.message;resolve();}})));
   const finished=await Promise.race([allExited.then(()=>true),new Promise(resolve=>setTimeout(()=>resolve(false),5000))]);
   if(process.platform==='win32'&&live.length)await new Promise(resolve=>setTimeout(resolve,500));
-  try{await store.queue;}catch{}
+  // Timers and late hook events keep queueing writes; one killed half way leaves the last change unsaved.
+  try{await store.drain();}catch{}
+  store.close();
   if(process.env.ACCOUNTOR_QUIT_DIAGNOSTICS)try{await fs.writeFile(process.env.ACCOUNTOR_QUIT_DIAGNOSTICS,JSON.stringify({terminals:live.length,finished,exits,waitedMs:Date.now()-started}));}catch{}
   app.quit();
 });

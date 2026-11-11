@@ -2,7 +2,7 @@
 
 以本地工作空间和内置终端为中心的 macOS / Windows 桌面应用，管理 Agent CLI 的账号、会话、用量与项目文件。
 
-当前版本 **1.4.2 正式版（安装包尚未签名/公证）** 接入 Claude Code，支持自动隔离的官方订阅账号，以及自定义供应商、密钥和模型配置。自定义供应商还可通过 Codex CLI、OpenCode 启动，由所选 API 协议决定可用的 Agent。
+当前版本 **1.4.3 正式版（安装包尚未签名/公证）** 接入 Claude Code，支持自动隔离的官方订阅账号，以及自定义供应商、密钥和模型配置。自定义供应商还可通过 Codex CLI、OpenCode 启动，由所选 API 协议决定可用的 Agent。
 
 ![账号与连接](docs/screenshots/account-cards-dark.png)
 
@@ -10,13 +10,13 @@
 
 ## 安装
 
-[Windows x64 安装版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.4.2/WbSpace-1.4.2-windows-x64-setup.exe) · [Windows x64 ZIP 解压版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.4.2/WbSpace-1.4.2-windows-x64-portable.zip) · [macOS Apple Silicon DMG](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.4.2/WbSpace-1.4.2-mac-arm64-unsigned.dmg)
+[Windows x64 安装版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.4.3/WbSpace-1.4.3-windows-x64-setup.exe) · [Windows x64 ZIP 解压版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.4.3/WbSpace-1.4.3-windows-x64-portable.zip) · [macOS Apple Silicon DMG](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.4.3/WbSpace-1.4.3-mac-arm64-unsigned.dmg)
 
-[Release、校验值及安装说明](https://github.com/SneyRio/Terminal-Workbench/releases/tag/v1.4.2)
+[Release、校验值及安装说明](https://github.com/SneyRio/Terminal-Workbench/releases/tag/v1.4.3)
 
 这是正式版，但安装包尚未签名/公证：macOS 只有临时签名，没有 Developer ID 和 Apple 公证；Windows 没有 Authenticode 证书。首次打开可能被系统拦截。macOS 需在系统设置的隐私与安全性中确认“仍要打开”，Windows 可能提示未知发布者，受管电脑可能禁止放行。请只从本仓库 Release 下载并核对 SHA256SUMS.txt。
 
-**一键更新**：设置 → 检查更新 → 下载并更新 → 重启并更新。下载期间不影响会话，安装包通过 SHA-256 校验后才可安装，只有点击重启时才退出应用，配置和会话保留。Windows 解压版和从磁盘映像直接运行的副本无法替换自身，会转到下载页。默认走系统代理；下载慢时可在设置里填写“更新代理”（如 `http://127.0.0.1:7897`），它只用于检查和下载更新。0.4.x 及更早版本需手动安装一次 1.4.2，之后才能一键更新。
+**一键更新**：设置 → 检查更新 → 下载并更新 → 重启并更新。下载期间不影响会话，安装包通过 SHA-256 校验后才可安装，只有点击重启时才退出应用，配置和会话保留。Windows 解压版和从磁盘映像直接运行的副本无法替换自身，会转到下载页。默认走系统代理；下载慢时可在设置里填写“更新代理”（如 `http://127.0.0.1:7897`），它只用于检查和下载更新。0.4.x 及更早版本需手动安装一次 1.4.3，之后才能一键更新。
 
 用户需自行安装 Claude CLI；应用自动检测，无需填写程序路径。Windows 支持原生安装、npm 原生依赖、WinGet、Scoop 等常见位置，并校验程序可运行；旧 npm 脚本失效时自动寻找其他安装。确实缺失时提供安装指引，安装后重新检测即可。再添加账号与工作空间。详见 [安装、升级及本机恢复说明](docs/install.md)。项目源码推送不代表 GitHub Release 已发布。
 
