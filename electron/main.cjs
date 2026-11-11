@@ -959,7 +959,7 @@ function registerHandlers() {
     const events=r.claudeSessionId?await chatHistory(store.account(r.accountId),{resumeId:r.claudeSessionId}).catch(()=>[]):[];
     return {events,seq:0,commands:[],closed:true};
   });
-  register('chat:send',(sid,content)=>chatRuntime(sid).send(content));
+  register('chat:send',(sid,content,options)=>chatRuntime(sid).send(content,{now:options?.now===true}));
   register('chat:respond',(sid,requestId,decision)=>chatRuntime(sid).respond(String(requestId),decision&&typeof decision==='object'?decision:{}));
   register('chat:interrupt',sid=>chatRuntime(sid).interrupt());
   register('chat:control',(sid,request)=>{

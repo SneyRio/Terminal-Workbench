@@ -65,6 +65,9 @@ class ChatRuntime{
     }
     if(event.type==='rate_limit_event'){const usage=usageFromRateLimit(event);if(usage)this.onUsage?.(usage);return;}
     if(event.type==='result'){this.busy=false;this.onTurn?.('idle',event);}
+    // Every turn opens with init. A message queued during the last turn (or sent with "send now", which interrupts it)
+    // starts the next turn on its own, right after the result, without a send() to mark it busy.
+    if(event.type==='system'&&event.subtype==='init'&&!this.busy){this.busy=true;this.onTurn?.('busy');}
     this.emit(event);
   }
   emit(event){
@@ -89,8 +92,11 @@ class ChatRuntime{
     return promise;
   }
   async initialize(){const reply=await this.control({subtype:'initialize'},30000).catch(()=>({}));this.commands=Array.isArray(reply.commands)?reply.commands.map(c=>({name:String(c.name),description:String(c.description||''),argumentHint:String(c.argumentHint||'')})):[];return reply;}
-  send(content){
-    const message=validContent(content);
+  // While a turn runs the CLI queues the message for the next tool boundary or turn. With `now` the running turn
+  // is interrupted instead; the CLI keeps queued messages through an interrupt and starts the next turn with them,
+  // so the message is written first and is not lost if the interrupt fails.
+  send(content,{now=false}={}){
+    const message=validContent(content),running=this.busy;
     this.write({type:'user',message:{role:'user',content:message},parent_tool_use_id:null,session_id:''});
     // Show the message at once instead of waiting for the CLI to echo it back (hooks run first).
     // Slash commands are left to the CLI, which echoes them in its own form.
@@ -100,6 +106,7 @@ class ChatRuntime{
       this.emit({type:'user',message:{role:'user',content:message},parent_tool_use_id:null,wb_local:true});
     }
     this.busy=true;this.onTurn?.('busy');
+    if(now&&running)this.interrupt().catch(()=>{});
   }
   respond(requestId,decision){
     const request=this.permissions.get(requestId);

@@ -296,6 +296,8 @@ const MODES = [{ id: 'auto', label: '自动' }, { id: 'plan', label: '计划' },
 const OTHER_MODES: Record<string, string> = { default: '逐项确认', acceptEdits: '自动接受编辑', dontAsk: '不询问' };
 const MODELS = ['default', 'opus', 'sonnet', 'haiku', 'fable', 'opus[1m]', 'sonnet[1m]'];
 
+const SEND_NOW_KEY = /Mac/i.test(navigator.platform) ? '⌘Enter' : 'Ctrl+Enter';
+
 export function ChatPane({ session, active, yolo, onFocus, onResume, onError }: { session: Session; active: boolean; yolo: boolean; onFocus: () => void; onResume: () => void; onError: (e: unknown) => void }) {
   const [events, setEvents] = useState<Ev[]>([]);
   const [closed, setClosed] = useState(true);
@@ -379,13 +381,14 @@ export function ChatPane({ session, active, yolo, onFocus, onResume, onError }: 
     try { const r = await call<{ answer: string; ms?: number }>('chat:btw', session.id, question, model); setBtw(list => list.map(b => b.id === id ? { ...b, answer: r.answer, ms: r.ms } : b)); }
     catch (e) { setBtw(list => list.map(b => b.id === id ? { ...b, error: e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(e) } : b)); }
   };
-  const send = async () => {
+  // While working a message waits in the CLI's queue; `now` interrupts the running turn so it goes at once.
+  const send = async (now = false) => {
     const body = text.trim();
     const side = body.match(/^\/btw(?:\s+([\s\S]*))?$/);
     if (side) { if (side[1]?.trim() && !attachments.length) void askBtw(side[1].trim()); else onError(new Error(attachments.length ? '/btw 不支持图片' : '用法：/btw <问题>')); return; }
     if ((!body && !attachments.length) || closed) return;
     const content = attachments.length ? [...attachments.map(a => ({ type: 'image', source: { type: 'base64', media_type: a.media_type, data: a.data } })), ...(body ? [{ type: 'text', text: body }] : [])] : body;
-    try { await call('chat:send', session.id, content); setText(''); setAttachments([]); stick.current = true; } catch (e) { onError(e); }
+    try { await call('chat:send', session.id, content, { now: now && busy }); setText(''); setAttachments([]); stick.current = true; } catch (e) { onError(e); }
   };
   const addImages = (files: File[]) => {
     for (const file of files.filter(f => /^image\/(png|jpeg|gif|webp)$/.test(f.type)).slice(0, 6)) {
@@ -442,7 +445,7 @@ export function ChatPane({ session, active, yolo, onFocus, onResume, onError }: 
       {slash.length > 0 && <div className="chat-slash">{slash.map((c, i) => <button key={c.name} className={i === pick % slash.length ? 'active' : ''} onMouseDown={e => { e.preventDefault(); setText('/' + c.name + ' '); setPick(0); }}><b>/{c.name}</b>{c.argumentHint && <i>{c.argumentHint}</i>}<span>{c.description}</span></button>)}</div>}
       {attachments.length > 0 && <div className="chat-attachments">{attachments.map((a, i) => <span key={i} className="chip"><img src={'data:' + a.media_type + ';base64,' + a.data} alt="" title="点击预览" onClick={() => setPreview('data:' + a.media_type + ';base64,' + a.data)}/>{a.name}<button aria-label="移除图片" onClick={() => setAttachments(list => list.filter((_, j) => j !== i))}><X size={11}/></button></span>)}</div>}
       <div className="chat-box">
-      <textarea ref={input} rows={Math.min(10, Math.max(2, text.split('\n').length))} value={text} placeholder={busy ? '工作中，可继续输入，消息会排队发送…' : '输入消息，Enter 发送，Shift+Enter 换行，/ 查看命令，可粘贴或拖入图片'}
+      <textarea ref={input} rows={Math.min(10, Math.max(2, text.split('\n').length))} value={text} placeholder={busy ? '工作中：Enter 排队发送，' + SEND_NOW_KEY + ' 立即发送（打断当前任务）' : '输入消息，Enter 发送，Shift+Enter 换行，/ 查看命令，可粘贴或拖入图片'}
         onChange={e => { setText(e.target.value); setPick(0); }}
         onPaste={e => { const files = [...e.clipboardData.files]; if (files.some(f => f.type.startsWith('image/'))) { e.preventDefault(); addImages(files); } }}
         onDrop={e => { const files = [...e.dataTransfer.files]; if (files.length) { e.preventDefault(); addImages(files); } }}
@@ -450,7 +453,7 @@ export function ChatPane({ session, active, yolo, onFocus, onResume, onError }: 
           if (e.nativeEvent.isComposing) return;
           if (slash.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); setPick(p => (p + (e.key === 'ArrowDown' ? 1 : slash.length - 1)) % slash.length); return; }
           if (slash.length && e.key === 'Tab') { e.preventDefault(); setText('/' + slash[pick % slash.length].name + ' '); return; }
-          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (slash.length && text !== '/' + slash[pick % slash.length].name) { setText('/' + slash[pick % slash.length].name + ' '); return; } void send(); }
+          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (slash.length && text !== '/' + slash[pick % slash.length].name) { setText('/' + slash[pick % slash.length].name + ' '); return; } void send(e.metaKey || e.ctrlKey); }
           // Esc closes side answers and the detail panel before it interrupts the turn.
           if (e.key === 'Escape' && btw.length) { e.preventDefault(); setBtw(list => list.slice(0, -1)); return; }
           if (e.key === 'Escape' && detail) { e.preventDefault(); setDetail(''); return; }
@@ -461,7 +464,8 @@ export function ChatPane({ session, active, yolo, onFocus, onResume, onError }: 
         <select aria-label="模型" title={model ? '当前使用：' + model : undefined} value={modelOverride || picked} onChange={e => { setModelOverride(e.target.value); void control({ subtype: 'set_model', model: e.target.value }); }}>{[...MODELS, ...(MODELS.includes(modelOverride || picked) ? [] : [modelOverride || picked])].map(m => <option key={m} value={m}>{m === 'default' ? '默认模型' : m}</option>)}</select>
         <span className="spacer"/>
         {busy && <button className="secondary chat-stop" title="中断（Esc）" onClick={() => void call('chat:interrupt', session.id).catch(onError)}><Stop size={13} weight="fill"/>中断</button>}
-        <button className="chat-send" aria-label="发送" title="发送（Enter）" disabled={!text.trim() && !attachments.length} onClick={() => void send()}><ArrowUp size={16} weight="bold"/></button>
+        {busy && (text.trim() || attachments.length > 0) && !/^\/btw(\s|$)/.test(text.trim()) ? <button className="secondary chat-send-now" title={'打断当前任务并立即发送（' + SEND_NOW_KEY + '）'} onClick={() => void send(true)}><Lightning size={13} weight="fill"/>立即发送</button> : null}
+        <button className="chat-send" aria-label={busy ? '排队发送' : '发送'} title={busy ? '排队发送（Enter）：当前步骤完成后交给 Claude' : '发送（Enter）'} disabled={!text.trim() && !attachments.length} onClick={() => void send()}><ArrowUp size={16} weight="bold"/></button>
       </div>
       </div>
     </div>}

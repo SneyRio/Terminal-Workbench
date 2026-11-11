@@ -81,6 +81,27 @@ test('control requests resolve with the CLI reply and turns report busy and idle
   assert.equal(child.written.at(-1).type,'user');
 });
 
+test('send now queues the message, then interrupts the running turn; otherwise it only sends',async()=>{
+  const child=fakeChild();const chat=new ChatRuntime(child);
+  chat.send('first',{now:true});
+  assert.deepEqual(child.written.map(m=>m.type),['user'],'nothing to interrupt while idle');
+  chat.send('second');
+  assert.deepEqual(child.written.map(m=>m.type),['user','user'],'a plain send while working is left to the CLI queue');
+  chat.send('third',{now:true});
+  assert.deepEqual(child.written.slice(-2).map(m=>m.type==='user'?m.message.content:m.request.subtype),['third','interrupt']);
+});
+
+test('a turn the CLI starts on its own from a queued message reports busy',async()=>{
+  const child=fakeChild(),turns=[];const chat=new ChatRuntime(child,{onTurn:s=>turns.push(s)});
+  chat.send('long task');chat.send('queued');
+  child.say({type:'system',subtype:'init',session_id:'s'});
+  child.say({type:'result',subtype:'error_during_execution',is_error:true});
+  child.say({type:'system',subtype:'init',session_id:'s'});
+  await tick();
+  assert.deepEqual(turns,['busy','busy','idle','busy'],'the init of a running turn changes nothing; the next one marks it busy again');
+  assert.equal(chat.busy,true);
+});
+
 test('the process exit rejects waiting requests and is reported once',async()=>{
   const child=fakeChild();let exited=null;
   const chat=new ChatRuntime(child,{onExit:code=>{exited=code;}});
