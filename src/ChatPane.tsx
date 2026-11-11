@@ -1,10 +1,10 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
 import { ArrowUp, CaretDown, CaretRight, ChatTeardropDots, CheckCircle, Circle, CircleNotch, Lightning, SidebarSimple, ShieldCheck, Stop, WarningCircle, X, XCircle } from '@phosphor-icons/react';
 import { call } from './api';
+import { Picker } from './Picker';
 import type { Account, Session } from './types';
 
 // ---- Conversation model, rebuilt from the CLI's stream-json events -------------------------------
@@ -296,46 +296,6 @@ const BTW = { name: 'btw', description: '旁路提问：基于当前对话快速
 const MODES = [{ id: 'auto', label: '自动' }, { id: 'plan', label: '计划' }, { id: 'bypassPermissions', label: 'YOLO' }];
 const OTHER_MODES: Record<string, string> = { default: '逐项确认', acceptEdits: '自动接受编辑', dontAsk: '不询问' };
 const MODELS = ['default', 'opus', 'sonnet', 'haiku', 'fable', 'opus[1m]', 'sonnet[1m]'];
-
-interface PickerOption { id: string; label: string }
-// The OS dropdown ignores the app theme and covers the composer, so the toolbar draws its own list.
-function Picker({ label, title, value, options, onSelect }: { label: string; title?: string; value: string; options: PickerOption[]; onSelect: (id: string) => void }) {
-  const [open, setOpen] = useState(false), [active, setActive] = useState(0);
-  const wrap = useRef<HTMLDivElement>(null);
-  const listId = useMemo(() => 'pick-' + Math.random().toString(36).slice(2, 9), []);
-  const current = options.find(o => o.id === value) || options[0];
-  const selected = Math.max(0, options.findIndex(o => o.id === value));
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: PointerEvent) => { if (!wrap.current?.contains(e.target as Node)) setOpen(false); };
-    window.addEventListener('pointerdown', close, true);
-    return () => window.removeEventListener('pointerdown', close, true);
-  }, [open]);
-  const show = () => { setActive(selected); setOpen(true); };
-  const pick = (i: number) => { onSelect(options[i].id); setOpen(false); };
-  const onKeyDown = (e: ReactKeyboardEvent<HTMLButtonElement>) => {
-    if (e.nativeEvent.isComposing) return;
-    if (!open) {
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); show(); }
-      return;
-    }
-    if (e.key === 'ArrowDown') { e.preventDefault(); setActive(i => (i + 1) % options.length); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(i => (i - 1 + options.length) % options.length); }
-    else if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); setActive(e.key === 'Home' ? 0 : options.length - 1); }
-    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(active); }
-    // Esc closes only this list: the pane would otherwise interrupt the running turn.
-    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setOpen(false); }
-    else if (e.key === 'Tab') setOpen(false);
-  };
-  return <div className="chat-picker" ref={wrap}>
-    <button type="button" className="chat-picker-trigger" role="combobox" aria-label={label} aria-expanded={open} aria-controls={listId} aria-activedescendant={open && options[active] ? listId + '-' + active : undefined} title={title} onClick={() => (open ? setOpen(false) : show())} onKeyDown={onKeyDown}>
-      <span>{current?.label}</span><CaretDown size={10} weight="bold"/>
-    </button>
-    {open && <div className="chat-picker-menu" role="listbox" id={listId} aria-label={label}>
-      {options.map((o, i) => <button type="button" key={o.id} id={listId + '-' + i} role="option" tabIndex={-1} aria-selected={o.id === value} className={'chat-picker-option' + (o.id === value ? ' selected' : '') + (i === active ? ' active' : '')} onMouseEnter={() => setActive(i)} onMouseDown={e => e.preventDefault()} onClick={() => pick(i)}>{o.label}</button>)}
-    </div>}
-  </div>;
-}
 
 const SEND_NOW_KEY = /Mac/i.test(navigator.platform) ? '⌘Enter' : 'Ctrl+Enter';
 

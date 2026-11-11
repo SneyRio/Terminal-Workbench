@@ -1,6 +1,6 @@
 {
   "name": "wbspace",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "private": true,
   "description": "Local workspaces for agent CLIs",
   "main": "electron/main.cjs",

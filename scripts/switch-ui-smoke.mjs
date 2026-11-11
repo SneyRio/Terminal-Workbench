@@ -9,7 +9,7 @@ const app=await electron.launch({args:[root],env:{...process.env,ACCOUNTOR_DATA_
 try{
  const page=await app.firstWindow();await page.setViewportSize({width:1440,height:1024});await expect(page.getByRole('heading',{name:'CLI 集成验证'})).toBeVisible();
  await page.locator('.session-navigation button').filter({hasText:'claude-jemusbob'}).click();
- await page.getByLabel('切换此会话账号').selectOption(state.accounts.find(a=>a.command==='claude-dp').id);
+ const switchTarget=state.accounts.find(a=>a.command==='claude-dp');await page.getByLabel('切换此会话账号').click();await page.getByRole('option',{name:switchTarget.name}).click();
  await page.getByRole('button',{name:'保存并切换',exact:true}).click();
  const dialog=page.getByRole('dialog',{name:'确认账号切换'});await expect(dialog).toBeVisible();
  await expect(dialog.locator('select')).toHaveValue('handoff');await expect(page.getByLabel('上下文交接资料')).toContainText('ACCOUNTOR_NATIVE_OK');

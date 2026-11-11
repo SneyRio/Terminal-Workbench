@@ -87,9 +87,9 @@ try{
     const modePicker=page.locator('.chat-toolbar [role=combobox][aria-label="权限模式"]');
     await expect(modePicker).toContainText('自动');
     await modePicker.click();
-    expect(await page.locator('.chat-picker-menu [role=option]').allTextContents()).toEqual(['自动','计划','YOLO']);
+    expect(await page.locator('.picker-menu [role=option]').allTextContents()).toEqual(['自动','计划','YOLO']);
     await page.keyboard.press('Escape');
-    await expect(page.locator('.chat-picker-menu')).toHaveCount(0);
+    await expect(page.locator('.picker-menu')).toHaveCount(0);
     await page.evaluate(sid=>window.accountor.invoke('chat:control',sid,{subtype:'set_permission_mode',mode:'default'}),session.id);
     await composer.fill('用 Bash 执行 echo chat-ok > chat.txt，不要用其他工具，完成后只回复“好了”。');await composer.press('Enter');
     const card=page.locator('.chat-permission:not(.resolved)');

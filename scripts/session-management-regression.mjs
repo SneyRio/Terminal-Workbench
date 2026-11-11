@@ -40,7 +40,7 @@ try{
  let source=(await state()).sessions.at(-1);
  await expect.poll(async()=>(await state()).sessions.find(s=>s.id===source.id).status).toBe('idle');
  checks.push('SessionStart marks a new ready CLI idle before any model turn');
- await page.getByLabel('切换此会话账号').selectOption(b.id);await page.getByRole('button',{name:'保存并切换',exact:true}).click();
+ await page.getByLabel('切换此会话账号').click();await page.getByRole('option',{name:b.name}).click();await page.getByRole('button',{name:'保存并切换',exact:true}).click();
  const dialog=page.getByRole('dialog',{name:'确认账号切换'});await expect(dialog).toBeVisible();
  await expect(dialog.locator('select')).toHaveValue('empty');await expect(dialog).toContainText('尚无对话记录');
  await dialog.getByRole('button',{name:'取消',exact:true}).click();expect((await state()).sessions).toHaveLength(1);
