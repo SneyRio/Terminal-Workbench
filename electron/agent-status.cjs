@@ -112,7 +112,7 @@ const QUIET_MS=15000;
 function quietSessions(sessions,terminals,now=Date.now(),quietMs=QUIET_MS){
  return sessions.filter(r=>{
   const t=terminals.get(r.id);
-  return r.status==='busy'&&(r.kind==='claude'||r.kind==='agent')&&!r.scheduleRunId&&t&&!t.closed&&now-(t.lastOutput||0)>=quietMs&&now-(r.eventTime||0)>=quietMs;
+  return r.status==='busy'&&(r.kind==='claude'||r.kind==='agent')&&!r.scheduleRunId&&t&&!t.chat&&!t.closed&&now-(t.lastOutput||0)>=quietMs&&now-(r.eventTime||0)>=quietMs;
  }).map(r=>r.id);
 }
 

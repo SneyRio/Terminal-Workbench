@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const { existsSync } = require('node:fs');
 const os = require('node:os');
 const {pathToFileURL}=require('node:url');
-const { execFile } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
 const { promisify } = require('node:util');
 const pty = require('node-pty');
 const gitView=require('./git.cjs');
@@ -18,6 +18,7 @@ const schedules=require('./schedules.cjs');
 const systemPrompts=require('./system-prompts.cjs');
 const agentStatus=require('./agent-status.cjs');
 const integrations=require('./integrations.cjs');
+const {CHAT_ARGS,CHAT_MODES,ChatRuntime,killTree,transcriptEvents}=require('./chat-engine.cjs');
 const {inspectLegacy,retireLegacy}=require('./app-migration.cjs');
 const {taskText,defaultTitle,migrateTitle,applyTaskTitle,copyTitle,transcriptTitle}=require('./session-titles.cjs');
 const {pruneDeleted,findDeleted,forgetDeleted,archiveSession,replaceSession,deduplicateRecovered}=require('./session-history.cjs');
@@ -435,6 +436,8 @@ async function startSession(input) {
   let kind = ['claude', 'shell', 'login', 'agent'].includes(input.kind) ? input.kind : 'claude';
   const workspace = kind === 'login' ? null : store.workspace(input.workspaceId);
   const backend = 'embedded';
+  // Claude sessions open in the terminal or the chat view; both run the same CLI and share its transcript.
+  const view=kind==='claude'&&!input.headless&&(input.view||store.state.settings.claudeView||defaultClaudeView())==='chat'?'chat':'terminal';
   const projects=kind==='login'?[]:(input.resumeProjects || workspace.projects);
   const acct = kind === 'shell' ? null : store.account(input.accountId || workspace?.accountId);
   if(acct)requireTool(acct.agentToolId);
@@ -515,7 +518,7 @@ async function startSession(input) {
     if(kind==='login'&&acct.provider==='custom')throw new Error('自定义供应商使用 API Key / Token，请在连接详情中编辑');
     if (kind === 'login') args = ['--settings',JSON.stringify({env:platformTools.browserSettings()}),'auth', 'login', '--claudeai'];
     else {
-      const settings = { hooks: {},...(backend==='embedded'?{tui:store.state.settings.terminalRenderer==='fullscreen'?'fullscreen':'default'}:{}),env:{...(backend==='embedded'&&store.state.settings.terminalRenderer!=='fullscreen'?{CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN:'1'}:{}),...platformTools.browserSettings(),...(acct.command==='claude-dp'?{ENABLE_TOOL_SEARCH:'false'}:{})} };
+      const settings = { hooks: {},...(backend==='embedded'&&view==='terminal'?{tui:store.state.settings.terminalRenderer==='fullscreen'?'fullscreen':'default'}:{}),env:{...(backend==='embedded'&&view==='terminal'&&store.state.settings.terminalRenderer!=='fullscreen'?{CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN:'1'}:{}),...platformTools.browserSettings(),...(acct.command==='claude-dp'?{ENABLE_TOOL_SEARCH:'false'}:{})} };
       // Test runs (ACCOUNTOR_DATA_DIR) must not pick up the developer's own status line.
       const defaultClaudeDir=!process.env.ACCOUNTOR_DATA_DIR||process.env.ACCOUNTOR_AUTO_SCAN==='1'?path.join(process.env.ACCOUNTOR_SCAN_HOME||os.homedir(),'.claude'):null;
       const hud=await inheritedStatusLine(accountDir(acct.id),defaultClaudeDir),originalStatusLine=hud.statusLine;
@@ -544,41 +547,126 @@ async function startSession(input) {
       if (extra.length&&!input.headless) args.push('--add-dir', ...extra);
       if(input.headless)args.push(...schedules.headlessArgs('claude-code',input.headless.prompt,input.headless.permission).args);
       else if((store.state.settings.yoloAgents||[]).includes('claude-code'))args.push('--dangerously-skip-permissions');
+      // The chat view offers auto, plan and YOLO; it starts in auto (or the mode the conversation had)
+      // and allows switching to YOLO later without restarting.
+      else if(view==='chat')args.push('--permission-mode',CHAT_MODES.includes(input.chatMode)?input.chatMode:'auto','--allow-dangerously-skip-permissions');
+      if(view==='chat')args.push(...CHAT_ARGS);
     }
   }
   if(process.platform==='win32'&&acct&&kind!=='agent'&&!official&&!/\.exe$/i.test(file))throw new Error('Windows 请选择原生 Claude CLI 可执行文件 claude.exe');
   if(!path.isAbsolute(file))throw new Error('请设置终端可执行文件的绝对路径');
   try{await fs.access(file,1);}catch{throw new Error('终端可执行文件不存在或无执行权限：'+file);}
   const record = { id: sessionId, workspaceId: workspace?.id || '', accountId: acct?.id || '', kind, backend, cwd, projects, pendingRestore:input.restoreSourceId,checkpoint:input.resumeFile||input.checkpointFile, handoffFile:input.handoffFile||input.inheritedHandoffFile, title: kind === 'login' ? '登录 · ' + acct.name : kind === 'shell' ? 'Shell' : 'Claude · ' + acct.name, createdAt: Date.now(), status: 'starting', groupId: input.groupId || sessionId, orientation: input.orientation || 'horizontal', authVerified:acct?store.account(acct.id).status==='valid':false, recovery:input.handoffFile?'handoff':input.resumeId || input.resumeFile ? 'requested' : undefined };
+  if(view==='chat'){record.view='chat';record.chatMode=args.includes('--dangerously-skip-permissions')?'bypassPermissions':CHAT_MODES.includes(input.chatMode)?input.chatMode:'auto';}
+  // Carried through a terminal stint too, so switching back to chat keeps the conversation's mode and model.
+  else if(kind==='claude'&&CHAT_MODES.includes(input.chatMode))record.chatMode=input.chatMode;
+  if(kind==='claude'&&validModel(input.chatModel))record.chatModel=input.chatModel;
   record.titleSource='default';record.titleToken=sessionId.replaceAll('-','').slice(-6).toUpperCase();record.title=defaultTitle(record);
   if(input.title){record.title=String(input.title).slice(0,120);record.titleSource='manual';}if(input.scheduleRunId)record.scheduleRunId=input.scheduleRunId;if(input.scheduleId)record.scheduleId=input.scheduleId;
   await store.update(s => { s.sessions.push(record); }); pushState();
   {
     try {
-      const proc = pty.spawn(file, args, { ...(process.platform==='win32'?{useConptyDll:true}:{}),name: 'xterm-256color', cols: 100, rows: 32, cwd, env });
-      const runtime = { proc,history:new TerminalHistory(),pending:[],pendingSize:0,outputTimer:null,seq:0,timer:null };
-      terminals.set(sessionId, runtime);
-      if(kind==='login')runtime.timer=setInterval(()=>{void statusAccount(acct.id).catch(()=>{});},3000);
-      proc.onData(data=>{runtime.lastOutput=Date.now();appendTerminal(runtime,sessionId,data,notify);});
-      proc.onExit(async ({ exitCode }) => {
-        flushTerminal(runtime,sessionId,notify);runtime.closed=true;runtime.closedAt=Date.now();runtime.history.shrink(128*1024);
-        const closed=[...terminals.entries()].filter(([,t])=>t.closed).sort((a,b)=>a[1].closedAt-b[1].closedAt);for(const [oldId] of closed.slice(0,-8))terminals.delete(oldId);
-        // Ended by quitting or updating the app, not by the user: keep it in the list so it can be restored.
-        const stopping=quitting;
-        if(acct)await pollTelemetry([sessionId]).catch(()=>{});
-        clearInterval(runtime.timer);
-        await store.update(s => { const r = s.sessions.find(s => s.id === sessionId); if (r) { r.status = stopping&&r.status!=='exited'?'interrupted':'exited'; r.exitCode = exitCode; } });
-        notify('terminal:exit', { id: sessionId, exitCode }); pushState();
-        if(stopping)return;
-        void finishScheduledRun(sessionId,exitCode).catch(()=>{});
-        if (acct) await statusAccount(acct.id).catch(()=>{});
-      });
-      await store.update(s => Object.assign(s.sessions.find(s => s.id === sessionId), { status: 'running', pid: proc.pid }));
+      let pid;
+      if(view==='chat'){
+        const history=await chatHistory(acct,input).catch(()=>[]);
+        const child=spawn(file,args,{cwd,env,stdio:['pipe','pipe','pipe'],windowsHide:true});
+        const runtime={history:new TerminalHistory(),pending:[],pendingSize:0,outputTimer:null,seq:0,timer:null};
+        // How this CLI was started, so a side question (/btw) runs with the same account and settings.
+        runtime.launch={file,env,cwd};
+        const chat=new ChatRuntime(child,{
+          onEvents:(events,seq)=>{runtime.lastOutput=Date.now();notify('chat:events',{id:sessionId,events,seq});},
+          onTurn:state=>{void setChatStatus(sessionId,state).catch(()=>{});},
+          onUsage:usage=>{void store.update(s=>{const a=s.accounts.find(a=>a.id===acct.id);if(a)a.usage={...(a.usage||{}),...usage,time:Date.now()};}).then(pushState).catch(()=>{});},
+          onExit:code=>{void sessionExited(sessionId,runtime,acct,code);},
+          onMode:mode=>{void rememberChatMode(sessionId,mode).catch(()=>{});},
+        });
+        for(const event of history)chat.emit(event);
+        chat.setMode(record.chatMode);
+        // Same surface as a node-pty process, so stopping, deleting and quitting treat both views alike.
+        runtime.chat=chat;runtime.proc={pid:child.pid,kill:()=>chat.kill(),write:()=>{throw new Error('对话会话不接受终端输入');},resize:()=>{},onExit:fn=>{if(chat.closed)fn({exitCode:child.exitCode??1});else child.once('exit',code=>fn({exitCode:code??1}));}};
+        terminals.set(sessionId,runtime);
+        // A model picked earlier in this conversation carries over to the resumed or relayed process.
+        void chat.initialize().then(async()=>{
+          notify('chat:commands',{id:sessionId,commands:chat.commands});
+          if(validModel(input.chatModel)&&input.chatModel!=='default')await chat.control({subtype:'set_model',model:input.chatModel}).then(()=>chat.setModel(input.chatModel)).catch(()=>{});
+        });
+        pid=child.pid;
+      }else{
+        const proc = pty.spawn(file, args, { ...(process.platform==='win32'?{useConptyDll:true}:{}),name: 'xterm-256color', cols: 100, rows: 32, cwd, env });
+        const runtime = { proc,history:new TerminalHistory(),pending:[],pendingSize:0,outputTimer:null,seq:0,timer:null };
+        terminals.set(sessionId, runtime);
+        if(kind==='login')runtime.timer=setInterval(()=>{void statusAccount(acct.id).catch(()=>{});},3000);
+        proc.onData(data=>{runtime.lastOutput=Date.now();appendTerminal(runtime,sessionId,data,notify);});
+        proc.onExit(({ exitCode }) => { void sessionExited(sessionId,runtime,acct,exitCode); });
+        pid=proc.pid;
+      }
+      await store.update(s => Object.assign(s.sessions.find(s => s.id === sessionId), { status: 'running', pid }));
     } catch (e) { await store.update(s => Object.assign(s.sessions.find(s => s.id === sessionId), { status: 'failed', error: e.message })); pushState(); throw e; }
   }
   pushState();
   return store.state.sessions.find(s => s.id === sessionId);
 }
+
+async function sessionExited(sessionId,runtime,acct,exitCode){
+  if(!runtime.chat)flushTerminal(runtime,sessionId,notify);
+  runtime.closed=true;runtime.closedAt=Date.now();runtime.history.shrink(128*1024);
+  const closed=[...terminals.entries()].filter(([,t])=>t.closed).sort((a,b)=>a[1].closedAt-b[1].closedAt);for(const [oldId] of closed.slice(0,-8))terminals.delete(oldId);
+  // Ended by quitting or updating the app, not by the user: keep it in the list so it can be restored.
+  const stopping=quitting;
+  if(acct)await pollTelemetry([sessionId]).catch(()=>{});
+  clearInterval(runtime.timer);
+  await store.update(s => { const r = s.sessions.find(s => s.id === sessionId); if (r) { r.status = stopping&&r.status!=='exited'?'interrupted':'exited'; r.exitCode = exitCode; } });
+  notify('terminal:exit', { id: sessionId, exitCode }); pushState();
+  if(stopping)return;
+  void finishScheduledRun(sessionId,exitCode).catch(()=>{});
+  if (acct) await statusAccount(acct.id).catch(()=>{});
+}
+
+// The chat view knows exactly when a turn starts and ends, so it does not wait for the hook files.
+async function setChatStatus(sessionId,state){
+  await store.update(s=>{const r=s.sessions.find(r=>r.id===sessionId);if(!r||['exited','failed','interrupted'].includes(r.status))return;r.status=state;if(state==='busy')r.hasSubmittedPrompt=true;});
+  pushState();
+}
+
+// The earlier turns of a resumed conversation, so the chat view does not open empty.
+// The CLI writes a conversation's transcript only after its first message.
+async function findTranscript(accountId,claudeSessionId){
+  if(!/^[0-9a-f-]{36}$/i.test(claudeSessionId||''))return null;
+  const projectsDir=path.join(accountDir(accountId),'projects');
+  for(const dir of await fs.readdir(projectsDir).catch(()=>[])){
+    const candidate=path.join(projectsDir,dir,claudeSessionId+'.jsonl');
+    if(existsSync(candidate))return candidate;
+  }
+  return null;
+}
+
+async function chatHistory(acct,input){
+  const file=input.resumeFile||(input.resumeId&&await findTranscript(acct.id,input.resumeId));
+  if(!file)return [];
+  const stat=await fs.stat(file);
+  // Very long transcripts: only the tail is shown; the CLI itself still resumes the whole conversation.
+  const handle=await fs.open(file,'r');
+  try{
+    const size=Math.min(stat.size,16*1024*1024),buffer=Buffer.alloc(size);
+    await handle.read(buffer,0,size,stat.size-size);
+    let raw=buffer.toString('utf8');if(size<stat.size)raw=raw.slice(raw.indexOf('\n')+1);
+    return [...transcriptEvents(raw),{type:'wb_note',text:'以上为恢复前的对话'}];
+  }finally{await handle.close();}
+}
+
+// Claude sessions open in the chat view unless the user chose the terminal. Test runs (ACCOUNTOR_DATA_DIR)
+// drive fake CLIs over a terminal, so they keep that default unless ACCOUNTOR_CLAUDE_VIEW says otherwise.
+const defaultClaudeView=()=>['chat','terminal'].includes(process.env.ACCOUNTOR_CLAUDE_VIEW)?process.env.ACCOUNTOR_CLAUDE_VIEW:process.env.ACCOUNTOR_DATA_DIR?'terminal':'chat';
+const validModel=model=>typeof model==='string'&&/^[\w.\[\]:/-]{1,100}$/.test(model);
+// Kept on the session so a resumed or relayed conversation starts in the same mode.
+async function rememberChatMode(sid,mode){
+  if(!CHAT_MODES.includes(mode))return;
+  await store.update(s=>{const r=s.sessions.find(r=>r.id===sid);if(r)r.chatMode=mode;});
+}
+
+const btwPrompt=question=>'<system-reminder>This is a side question from the user (/btw). Answer it directly and concisely from the conversation so far. You have no tools here. Do not continue, plan or restate the ongoing task; this answer is not added to the conversation.</system-reminder>\n\n'+question;
+
+function chatRuntime(sid){const t=terminals.get(sid);if(!t?.chat||t.closed)throw new Error('对话已结束，请先恢复会话');return t.chat;}
 
 let titleWork=Promise.resolve();
 function refreshTitles(ids){
@@ -618,14 +706,14 @@ async function expireDeleted(){
   }
 }
 
-function restoreSession(sid,fromTrash){
+function restoreSession(sid,fromTrash,options={}){
   if(deletingSessions.has(sid))throw new Error('会话正在删除，请稍后重试');
   if(restoringJobs.has(sid))return restoringJobs.get(sid);
-  const job=performRestore(sid,fromTrash).finally(()=>restoringJobs.delete(sid));
+  const job=performRestore(sid,fromTrash,options).finally(()=>restoringJobs.delete(sid));
   restoringJobs.set(sid,job);return job;
 }
 
-async function performRestore(sid,fromTrash){
+async function performRestore(sid,fromTrash,options={}){
   await expireDeleted();
   const deleted=fromTrash?findDeleted(store.state,sid):null;
   const source=fromTrash?deleted?.row.session:store.state.sessions.find(s=>s.id===sid);
@@ -652,12 +740,13 @@ async function performRestore(sid,fromTrash){
       await store.update(s=>{if(!s.workspaces.some(w=>w.id===snapshot.id)){s.workspaces.push({...snapshot,selectedSession:'',hiddenGroups:[]});createdWorkspace=true;}});
     }
   if(source.kind==='claude'&&!source.claudeSessionId)throw new Error('未取得精确的 Claude 会话 ID，不能猜测恢复；删除记录将保留，可检查原 CLI 历史后重试');
-    let restore={resumeId:source.claudeSessionId};
-    if(source.kind==='claude'&&source.checkpoint){
+    // A conversation with no message yet has nothing to resume: start it again in place.
+    let restore=options.fresh?{}:{resumeId:source.claudeSessionId};
+    if(source.kind==='claude'&&source.checkpoint&&!options.fresh){
       const actual=await fs.access(source.transcript||'').then(()=>true).catch(()=>false);
       if(!actual)restore=source.handoffFile?{handoffFile:source.handoffFile,checkpointFile:source.checkpoint}:{resumeFile:await sourceTranscript(source)};
     }
-    result=await startSession({workspaceId:source.workspaceId,accountId:source.accountId,kind:source.kind,resumeCwd:source.cwd,resumeProjects:source.projects,resumeBackend:source.backend,checkpointFile:source.checkpoint,...restore,inheritedHandoffFile:source.handoffFile,restoreSourceId:sid});
+    result=await startSession({workspaceId:source.workspaceId,accountId:source.accountId,kind:source.kind,resumeCwd:source.cwd,resumeProjects:source.projects,resumeBackend:source.backend,view:options.view||source.view||'terminal',chatMode:source.chatMode,chatModel:source.chatModel,checkpointFile:source.checkpoint,...restore,inheritedHandoffFile:source.handoffFile,restoreSourceId:sid});
     const deadline=Date.now()+30000;
     let ready;
     while(Date.now()<deadline){
@@ -858,6 +947,76 @@ function registerHandlers() {
     const runtime=terminals.get(sid);if(runtime&&!runtime.closed)runtime.proc.kill(); return true;
   });
   register('terminal:resume',sid=>restoreSession(sid,false));
+  register('chat:buffer',async sid=>{
+    const find=()=>store.state.sessions.find(s=>s.id===sid);
+    const r=find();if(!r)throw new Error('会话不存在');
+    // A starting chat session reads its earlier history before its process is registered;
+    // wait for it rather than reporting a live session as not running.
+    for(const deadline=Date.now()+15000;!terminals.get(sid)?.chat&&r.view==='chat'&&find()?.status==='starting'&&Date.now()<deadline;)await new Promise(done=>setTimeout(done,50));
+    const t=terminals.get(sid);
+    if(t?.chat)return {events:t.chat.events,seq:t.chat.seq,commands:t.chat.commands,closed:t.closed};
+    // Opened after a restart: show what the CLI recorded, read-only until the session is resumed.
+    const events=r.claudeSessionId?await chatHistory(store.account(r.accountId),{resumeId:r.claudeSessionId}).catch(()=>[]):[];
+    return {events,seq:0,commands:[],closed:true};
+  });
+  register('chat:send',(sid,content)=>chatRuntime(sid).send(content));
+  register('chat:respond',(sid,requestId,decision)=>chatRuntime(sid).respond(String(requestId),decision&&typeof decision==='object'?decision:{}));
+  register('chat:interrupt',sid=>chatRuntime(sid).interrupt());
+  register('chat:control',(sid,request)=>{
+    if(request?.subtype==='set_model'&&validModel(request.model)){
+      const chat=chatRuntime(sid);
+      return chat.control({subtype:'set_model',model:request.model==='default'?undefined:request.model}).then(async reply=>{
+        chat.setModel(request.model);
+        await store.update(s=>{const r=s.sessions.find(r=>r.id===sid);if(r)r.chatModel=request.model;});
+        return reply;
+      });
+    }
+    // 'default' (ask for every tool) is not offered in the picker; it stays reachable for tests.
+    if(request?.subtype==='set_permission_mode'&&[...CHAT_MODES,'default'].includes(request.mode)){
+      const chat=chatRuntime(sid);
+      return chat.control({subtype:'set_permission_mode',mode:request.mode}).then(async reply=>{chat.setMode(request.mode);await rememberChatMode(sid,request.mode);return reply;});
+    }
+    throw new Error('不支持的操作');
+  });
+  // /btw: a side question answered from the conversation so far, without tools, without touching it.
+  // The interactive /btw is not available in stream-json mode, so a throwaway fork of the session answers it.
+  register('chat:btw',async(sid,question,model)=>{
+    const r=store.state.sessions.find(s=>s.id===sid),t=terminals.get(sid);
+    if(!r||r.view!=='chat'||!t?.launch)throw new Error('会话未运行');
+    if(typeof question!=='string'||!question.trim()||question.length>20000)throw new Error('请输入问题');
+    if(!r.claudeSessionId||!(await findTranscript(r.accountId,r.claudeSessionId)))throw new Error('先发一条消息，再用 /btw 提问');
+    const args=['-p','--resume',r.claudeSessionId,'--fork-session','--no-session-persistence','--tools','','--output-format','json'];
+    if(validModel(model)&&model!=='default')args.push('--model',model);
+    const child=spawn(t.launch.file,args,{cwd:t.launch.cwd,env:t.launch.env,stdio:['pipe','pipe','pipe'],windowsHide:true});
+    child.stdin.on('error',()=>{});
+    child.stdin.end(btwPrompt(question.trim()));
+    let out='',err='';
+    child.stdout.setEncoding('utf8').on('data',d=>{out+=d;});
+    child.stderr.setEncoding('utf8').on('data',d=>{err=(err+d).slice(-2000);});
+    const timer=setTimeout(()=>killTree(child),180000);
+    const code=await new Promise(resolve=>{child.on('exit',resolve);child.on('error',()=>resolve(1));});
+    clearTimeout(timer);
+    let result;try{result=JSON.parse(out.slice(out.indexOf('{')));}catch{}
+    if(!result||result.is_error||typeof result.result!=='string')throw new Error(result?.result||err.trim().slice(-500)||'旁路提问失败（退出码 '+code+'）');
+    return {answer:result.result,ms:result.duration_ms,cost:result.total_cost_usd};
+  });
+  // Same conversation, other view: end this process, then resume the exact session ID in the other one.
+  register('chat:switch-view',async(sid,view)=>{
+    if(!['chat','terminal'].includes(view))throw new Error('无效视图');
+    const r=store.state.sessions.find(s=>s.id===sid);
+    if(!r||r.kind!=='claude')throw new Error('只有 Claude 会话可以切换视图');
+    if((r.view||'terminal')===view)return r;
+    if(!r.claudeSessionId)throw new Error('尚未取得 Claude 会话 ID，请等会话启动完成后再切换');
+    if(r.status==='busy')throw new Error('正在工作中，请等本轮结束或先中断后再切换');
+    const t=terminals.get(sid);
+    if(t&&!t.closed){
+      t.proc.kill();
+      const deadline=Date.now()+8000;
+      while((!t.closed||store.state.sessions.find(s=>s.id===sid)?.status!=='exited')&&Date.now()<deadline)await new Promise(r=>setTimeout(r,50));
+      if(!t.closed)throw new Error('原会话尚未结束，请稍后重试');
+    }
+    return restoreSession(sid,false,{view,fresh:!(await findTranscript(r.accountId,r.claudeSessionId))});
+  });
   register('trash:restore',sid=>restoreSession(sid,true));
   register('trash:delete',async sid=>{
     await expireDeleted();
@@ -932,7 +1091,7 @@ function registerHandlers() {
     const operation = { id:id(), source:sid, targetAccountId, time:Date.now(), checkpoint, status:'starting' };
     await store.update(s=>s.operations.push(operation));
     try {
-      const result=await startSession({ workspaceId:source.workspaceId, accountId:targetAccountId, kind:'claude', ...(empty?{}:handoffFile?{handoffFile,checkpointFile:checkpoint}:{resumeFile:checkpoint}), resumeCwd:source.cwd, resumeProjects:source.projects, resumeBackend:source.backend });
+      const result=await startSession({ workspaceId:source.workspaceId, accountId:targetAccountId, kind:'claude', view:source.view||'terminal', chatMode:source.chatMode,chatModel:source.chatModel, ...(empty?{}:handoffFile?{handoffFile,checkpointFile:checkpoint}:{resumeFile:checkpoint}), resumeCwd:source.cwd, resumeProjects:source.projects, resumeBackend:source.backend });
       const readyDeadline=Date.now()+30000,launchedAt=Date.now();
       let ready=false;
       while(Date.now()<readyDeadline){
@@ -1007,7 +1166,7 @@ function registerHandlers() {
   register('settings:save', async input => {
     const prompts=input.systemPrompts!==undefined?systemPrompts.normalizePrompts(input.systemPrompts):undefined;
     const yolo=Array.isArray(input.yoloAgents)?[...new Set(input.yoloAgents.filter(id=>agentTools.some(t=>t.id===id)))]:undefined;
-    await store.update(s=> { s.settings = { ...s.settings,...(prompts?{systemPrompts:prompts}:{}),...(yolo?{yoloAgents:yolo}:{}), theme:['light','dark','system'].includes(input.theme)?input.theme:s.settings.theme,navigationCollapsed:typeof input.navigationCollapsed==='boolean'?input.navigationCollapsed:s.settings.navigationCollapsed, navMenuExpanded:typeof input.navMenuExpanded==='boolean'?input.navMenuExpanded:!!s.settings.navMenuExpanded, opacity:Math.min(100,Math.max(0,Number(input.opacity??s.settings.opacity))), fontSize:Number.isFinite(Number(input.fontSize))?Math.min(32,Math.max(10,Number(input.fontSize))):s.settings.fontSize,fontFamily:['JetBrains Mono','system','Menlo','Monaco','Consolas'].includes(input.fontFamily)?input.fontFamily:s.settings.fontFamily,lineHeight:Number.isFinite(Number(input.lineHeight))?Math.min(2,Math.max(1,Number(input.lineHeight))):s.settings.lineHeight,terminalRenderer:['classic','fullscreen'].includes(input.terminalRenderer)?input.terminalRenderer:s.settings.terminalRenderer, ...(typeof input.claudePath==='string'?{claudePath:input.claudePath}:{}), ...(typeof input.shell==='string'?{shell:input.shell}:{}) }; }); pushState();
+    await store.update(s=> { s.settings = { ...s.settings,...(prompts?{systemPrompts:prompts}:{}),...(yolo?{yoloAgents:yolo}:{}), theme:['light','dark','system'].includes(input.theme)?input.theme:s.settings.theme,navigationCollapsed:typeof input.navigationCollapsed==='boolean'?input.navigationCollapsed:s.settings.navigationCollapsed, navMenuExpanded:typeof input.navMenuExpanded==='boolean'?input.navMenuExpanded:!!s.settings.navMenuExpanded, opacity:Math.min(100,Math.max(0,Number(input.opacity??s.settings.opacity))), fontSize:Number.isFinite(Number(input.fontSize))?Math.min(32,Math.max(10,Number(input.fontSize))):s.settings.fontSize,fontFamily:['JetBrains Mono','system','Menlo','Monaco','Consolas'].includes(input.fontFamily)?input.fontFamily:s.settings.fontFamily,lineHeight:Number.isFinite(Number(input.lineHeight))?Math.min(2,Math.max(1,Number(input.lineHeight))):s.settings.lineHeight,terminalRenderer:['classic','fullscreen'].includes(input.terminalRenderer)?input.terminalRenderer:s.settings.terminalRenderer,claudeView:['terminal','chat'].includes(input.claudeView)?input.claudeView:s.settings.claudeView, ...(typeof input.claudePath==='string'?{claudePath:input.claudePath}:{}), ...(typeof input.shell==='string'?{shell:input.shell}:{}) }; }); pushState();
   });
   register('settings:background', async remove => {
     let file='';

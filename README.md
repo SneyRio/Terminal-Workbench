@@ -2,7 +2,7 @@
 
 以本地工作空间和内置终端为中心的 macOS / Windows 桌面应用，管理 Agent CLI 的账号、会话、用量与项目文件。
 
-当前版本 **1.3.2 正式版（安装包尚未签名/公证）** 接入 Claude Code，支持自动隔离的官方订阅账号，以及自定义供应商、密钥和模型配置。自定义供应商还可通过 Codex CLI、OpenCode 启动，由所选 API 协议决定可用的 Agent。
+当前版本 **1.4.0 正式版（安装包尚未签名/公证）** 接入 Claude Code，支持自动隔离的官方订阅账号，以及自定义供应商、密钥和模型配置。自定义供应商还可通过 Codex CLI、OpenCode 启动，由所选 API 协议决定可用的 Agent。
 
 ![账号与连接](docs/screenshots/account-cards-dark.png)
 
@@ -10,13 +10,13 @@
 
 ## 安装
 
-[Windows x64 安装版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.3.2/WbSpace-1.3.2-windows-x64-setup.exe) · [Windows x64 ZIP 解压版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.3.2/WbSpace-1.3.2-windows-x64-portable.zip) · [macOS Apple Silicon DMG](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.3.2/WbSpace-1.3.2-mac-arm64-unsigned.dmg)
+[Windows x64 安装版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.4.0/WbSpace-1.4.0-windows-x64-setup.exe) · [Windows x64 ZIP 解压版](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.4.0/WbSpace-1.4.0-windows-x64-portable.zip) · [macOS Apple Silicon DMG](https://github.com/SneyRio/Terminal-Workbench/releases/download/v1.4.0/WbSpace-1.4.0-mac-arm64-unsigned.dmg)
 
-[Release、校验值及安装说明](https://github.com/SneyRio/Terminal-Workbench/releases/tag/v1.3.2)
+[Release、校验值及安装说明](https://github.com/SneyRio/Terminal-Workbench/releases/tag/v1.4.0)
 
 这是正式版，但安装包尚未签名/公证：macOS 只有临时签名，没有 Developer ID 和 Apple 公证；Windows 没有 Authenticode 证书。首次打开可能被系统拦截。macOS 需在系统设置的隐私与安全性中确认“仍要打开”，Windows 可能提示未知发布者，受管电脑可能禁止放行。请只从本仓库 Release 下载并核对 SHA256SUMS.txt。
 
-**一键更新**：设置 → 检查更新 → 下载并更新 → 重启并更新。下载期间不影响会话，安装包通过 SHA-256 校验后才可安装，只有点击重启时才退出应用，配置和会话保留。Windows 解压版和从磁盘映像直接运行的副本无法替换自身，会转到下载页。默认走系统代理；下载慢时可在设置里填写“更新代理”（如 `http://127.0.0.1:7897`），它只用于检查和下载更新。0.4.x 及更早版本需手动安装一次 1.3.2，之后才能一键更新。
+**一键更新**：设置 → 检查更新 → 下载并更新 → 重启并更新。下载期间不影响会话，安装包通过 SHA-256 校验后才可安装，只有点击重启时才退出应用，配置和会话保留。Windows 解压版和从磁盘映像直接运行的副本无法替换自身，会转到下载页。默认走系统代理；下载慢时可在设置里填写“更新代理”（如 `http://127.0.0.1:7897`），它只用于检查和下载更新。0.4.x 及更早版本需手动安装一次 1.4.0，之后才能一键更新。
 
 用户需自行安装 Claude CLI；应用自动检测，无需填写程序路径。Windows 支持原生安装、npm 原生依赖、WinGet、Scoop 等常见位置，并校验程序可运行；旧 npm 脚本失效时自动寻找其他安装。确实缺失时提供安装指引，安装后重新检测即可。再添加账号与工作空间。详见 [安装、升级及本机恢复说明](docs/install.md)。项目源码推送不代表 GitHub Release 已发布。
 
@@ -24,6 +24,7 @@
 
 - **无工作空间会话**：侧边栏顶部固定入口，会话在 `~/wbspace` 中启动（首次启动自动创建），可单独设置默认 Agent 和账号，不能移除或改目录。
 - **工作空间**：多个有序本地项目，第一个项目根目录是 CLI 工作目录。左右导航可折叠，工作空间固定按创建时间倒序排列。
+- **Claude 对话界面**：Claude 会话默认以 Desktop 风格的对话界面打开，底层仍是同一个 Claude Code CLI（`--input-format/--output-format stream-json` 加 `--permission-prompt-tool stdio`），系统提示词、工具、CLAUDE.md、skills、hooks、插件、子代理和 MCP 都不变。流式回复、Markdown 与代码高亮、工具卡片（含耗时）、权限确认、`AskUserQuestion` 选项卡片、计划审批、子代理右侧详情（可拖动调宽）、图片粘贴/拖入与点击预览、`/` 命令补全、`/btw` 旁路提问、Esc 中断；权限模式为自动、计划、YOLO，模型可切换，切换界面或账号后保持。面板右上角可在对话与终端之间切换同一段对话（`/rewind` 等终端专属功能切过去即可用）；设置中可改回默认终端。仅 Claude Code 账号支持，其他 Agent 仍用终端。
 - **内置终端**：真实 PTY、多标签和分屏、搜索、复制、滚动、字体与行高设置；左侧与中间标签以边框跑马灯提示实际工作状态，遵循减少动态效果设置。工作状态来自各 Agent 自己的事件：Claude Code 与 Qoder 用 hook（含额度用尽等 API 错误结束时的 `StopFailure`），Codex 用 hook（应用在该账号配置中登记信任，与在 Codex 界面里批准相同），OpenCode 用插件；结束时没有事件（如按 Esc 打断、请求前就失败）的情况，终端 15 秒无输出即视为等待输入。Codex 新会话在发出第一条消息前显示“进程运行中”。仅支持内置终端，已移除外部终端联动。
 - **账号卡片**：搜索、工具筛选、身份与认证状态、五小时及周剩余额度、重置倒计时、连接详情和快捷新建会话。
 - **连接管理**：引用本机已配置的启动入口、自动生成官方独立账号目录和启动命令，或添加自定义供应商与多个模型。自定义模型不套用订阅额度条，底部状态栏与内置 HUD 回退也不显示订阅额度占位。
