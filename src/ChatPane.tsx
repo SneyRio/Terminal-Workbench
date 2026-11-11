@@ -355,6 +355,22 @@ export function ChatPane({ session, active, yolo, onFocus, onResume, onError }: 
 
   useLayoutEffect(() => { const el = scroller.current; if (el && stick.current) el.scrollTop = el.scrollHeight; }, [items, live]);
   useEffect(() => { if (active) requestAnimationFrame(() => input.current?.focus()); }, [active]);
+  // Esc works wherever the focus is in the active chat, not only in the message box (which handles it itself),
+  // with the same order: side answers, then the detail panel, then the running turn.
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('[role=dialog],dialog')) return;
+      if (target && target !== document.body && !pane.current?.contains(target) && target.matches('input,textarea,select,[contenteditable=true],.xterm *')) return;
+      if (btw.length) { e.preventDefault(); setBtw(list => list.slice(0, -1)); return; }
+      if (detail) { e.preventDefault(); setDetail(''); return; }
+      if (busy && !closed) { e.preventDefault(); void call('chat:interrupt', session.id).catch(onError); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [active, busy, closed, btw.length, detail, session.id]);
 
   const slash = text.startsWith('/') && !/\s/.test(text) ? [BTW, ...commands.filter(c => c.name !== 'btw')].filter(c => ('/' + c.name).startsWith(text)).slice(0, 8) : [];
   const askBtw = async (question: string) => {

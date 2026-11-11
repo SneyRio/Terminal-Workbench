@@ -136,6 +136,19 @@ html[data-platform=win32] .traffic-space{height:0}html[data-platform=win32] .nav
 .chat-markdown code{font-family:"Accountor JetBrains Mono",SFMono-Regular,Menlo,monospace;font-size:.88em;background:var(--hover);padding:1px 4px;border-radius:4px}
 .chat-markdown pre code{background:transparent;padding:0}
 .chat-markdown .hljs{background:transparent!important}
+.chat-markdown pre code.hljs{padding:0}
+/* The bundled highlight theme is a light one: in dark mode every token it colours needs a light counterpart,
+   including plain text, or commands and variables turn near-black on the dark code background. */
+[data-theme=dark] .hljs,[data-theme=dark] .hljs-subst,[data-theme=dark] .hljs-emphasis,[data-theme=dark] .hljs-strong,[data-theme=dark] .hljs-operator{color:var(--text)}
+[data-theme=dark] .hljs-doctag,[data-theme=dark] .hljs-meta .hljs-keyword,[data-theme=dark] .hljs-template-tag,[data-theme=dark] .hljs-type,[data-theme=dark] .hljs-variable.language_{color:#c7a6f2}
+[data-theme=dark] .hljs-variable,[data-theme=dark] .hljs-template-variable,[data-theme=dark] .hljs-attribute,[data-theme=dark] .hljs-meta,[data-theme=dark] .hljs-selector-attr,[data-theme=dark] .hljs-selector-class,[data-theme=dark] .hljs-selector-id,[data-theme=dark] .hljs-section{color:#89b9ef}
+[data-theme=dark] .hljs-regexp,[data-theme=dark] .hljs-meta .hljs-string{color:#a1cbb2}
+[data-theme=dark] .hljs-symbol{color:#e0bd81}
+[data-theme=dark] .hljs-name,[data-theme=dark] .hljs-quote,[data-theme=dark] .hljs-selector-pseudo{color:#82cdb3}
+[data-theme=dark] .hljs-code,[data-theme=dark] .hljs-formula{color:#8d91a5}
+[data-theme=dark] .hljs-bullet{color:#d7b68b}
+[data-theme=dark] .hljs-addition{color:var(--git-added);background-color:rgba(122,198,155,.12)}
+[data-theme=dark] .hljs-deletion{color:var(--git-deleted);background-color:rgba(240,139,153,.12)}
 .chat-markdown table{border-collapse:collapse;font-size:12px;display:block;overflow-x:auto}
 .chat-markdown td,.chat-markdown th{border:1px solid var(--border);padding:4px 8px;text-align:left}
 .chat-markdown blockquote{border-left:3px solid var(--accent);margin:6px 0;padding-left:12px;color:var(--muted)}

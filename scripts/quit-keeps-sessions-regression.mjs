@@ -1,5 +1,6 @@
 // Quitting or updating the app ends the built-in terminals, but those sessions were not ended by the user: after the
-// next launch they are still in the session list, marked interrupted and ready to restore.
+// next launch they are still in the session list, marked interrupted and ready to restore, even though the CLI
+// reports SessionEnd through its hooks as it exits.
 import {_electron as electron} from 'playwright';
 import {expect} from '@playwright/test';
 import fs from 'node:fs/promises';
@@ -9,6 +10,10 @@ await fs.mkdir(project,{recursive:true});await fs.mkdir(data,{recursive:true});a
 await fs.writeFile(path.join(data,'state.json'),JSON.stringify({onboarding:{completedAt:1},accounts:[],sessions:[],workspaces:[]}));
 await fs.writeFile(fixture,`#!${process.execPath}
 if(process.argv.includes('status')){console.log(JSON.stringify({loggedIn:true}));process.exit(0);}
+// Like the real CLI, report SessionStart and, when ended by a signal, SessionEnd through the telemetry hooks.
+const fs=require('node:fs'),path=require('node:path'),sid=require('node:crypto').randomUUID();
+const report=event=>fs.mkdirSync(process.env.ACCOUNTOR_TELEMETRY_DIR,{recursive:true})||fs.writeFileSync(path.join(process.env.ACCOUNTOR_TELEMETRY_DIR,process.env.ACCOUNTOR_RUN_ID+'-event.json'),JSON.stringify({time:Date.now(),event,sessionId:sid,cwd:process.cwd()}));
+report('SessionStart');for(const signal of ['SIGHUP','SIGTERM'])process.on(signal,()=>{report('SessionEnd');process.exit(129);});
 console.log('INTERACTIVE_READY');if(process.stdin.isTTY)process.stdin.setRawMode(true);process.stdin.resume();
 `,{mode:0o700});
 const env={...process.env,ACCOUNTOR_DATA_DIR:data};delete env.ELECTRON_RUN_AS_NODE;

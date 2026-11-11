@@ -577,7 +577,7 @@ async function startSession(input) {
           onEvents:(events,seq)=>{runtime.lastOutput=Date.now();notify('chat:events',{id:sessionId,events,seq});},
           onTurn:state=>{void setChatStatus(sessionId,state).catch(()=>{});},
           onUsage:usage=>{void store.update(s=>{const a=s.accounts.find(a=>a.id===acct.id);if(a)a.usage={...(a.usage||{}),...usage,time:Date.now()};}).then(pushState).catch(()=>{});},
-          onExit:code=>{void sessionExited(sessionId,runtime,acct,code);},
+          onExit:code=>{runtime.exiting=sessionExited(sessionId,runtime,acct,code).catch(()=>{});},
           onMode:mode=>{void rememberChatMode(sessionId,mode).catch(()=>{});},
         });
         for(const event of history)chat.emit(event);
@@ -597,7 +597,7 @@ async function startSession(input) {
         terminals.set(sessionId, runtime);
         if(kind==='login')runtime.timer=setInterval(()=>{void statusAccount(acct.id).catch(()=>{});},3000);
         proc.onData(data=>{runtime.lastOutput=Date.now();appendTerminal(runtime,sessionId,data,notify);});
-        proc.onExit(({ exitCode }) => { void sessionExited(sessionId,runtime,acct,exitCode); });
+        proc.onExit(({ exitCode }) => { runtime.exiting=sessionExited(sessionId,runtime,acct,exitCode).catch(()=>{}); });
         pid=proc.pid;
       }
       await store.update(s => Object.assign(s.sessions.find(s => s.id === sessionId), { status: 'running', pid }));
@@ -1224,9 +1224,14 @@ async function pollTelemetry(sessionIds) {
       if(type==='event'&&r.status!=='exited'){
         r.lastEvent=data.event;
         if(data.event==='SessionStart'&&['running','starting','external'].includes(r.status))r.status='idle';
-        if(data.event==='UserPromptSubmit'){r.status='busy';r.hasSubmittedPrompt=true;}
-        if(['Stop','StopFailure','Interrupt'].includes(data.event)){r.status='idle';r.hasSubmittedPrompt=true;}
-        if(data.event==='SessionEnd')r.status='exited';
+        // A running chat view follows its own stream (setChatStatus). The hooks lag behind it, and an interrupted
+        // turn fires no Stop hook, so a late UserPromptSubmit would leave the session working for good.
+        const chat=terminals.get(id)?.chat&&!terminals.get(id).closed;
+        if(data.event==='UserPromptSubmit'){if(!chat)r.status='busy';r.hasSubmittedPrompt=true;}
+        if(['Stop','StopFailure','Interrupt'].includes(data.event)){if(!chat)r.status='idle';r.hasSubmittedPrompt=true;}
+        // Quitting or updating ends the CLIs, which still report SessionEnd: leave those to sessionExited,
+        // which keeps them as interrupted instead of ended by the user.
+        if(data.event==='SessionEnd'&&!quitting)r.status='exited';
       }
     }
   });await refreshTitles([...new Set(pending.filter(p=>p.type==='event').map(p=>p.id))]);pushState();
@@ -1314,7 +1319,8 @@ app.on('before-quit',async e=> {
   // Wait for the terminals to exit before quitting: tearing down a live ConPTY while the app exits crashes it on
   // Windows (0xC0000409, 0xC0000005). node-pty reports the exit before its ConPTY threads finish, hence the extra pause.
   const started=Date.now(),live=[...terminals.entries()].filter(([,t])=>!t.closed),exits={};
-  const allExited=Promise.all(live.map(([sid,t])=>new Promise(resolve=>{try{t.proc.onExit(()=>{exits[sid]=Date.now()-started;resolve();});t.proc.kill();}catch(error){exits[sid]='kill failed: '+error.message;resolve();}})));
+  // Each session's own exit handler runs first and records it as interrupted; wait for that record too.
+  const allExited=Promise.all(live.map(([sid,t])=>new Promise(resolve=>{try{t.proc.onExit(()=>{exits[sid]=Date.now()-started;resolve(t.exiting);});t.proc.kill();}catch(error){exits[sid]='kill failed: '+error.message;resolve();}})));
   const finished=await Promise.race([allExited.then(()=>true),new Promise(resolve=>setTimeout(()=>resolve(false),5000))]);
   if(process.platform==='win32'&&live.length)await new Promise(resolve=>setTimeout(resolve,500));
   try{await store.queue;}catch{}
