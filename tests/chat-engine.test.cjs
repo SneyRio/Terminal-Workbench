@@ -6,7 +6,8 @@ const {CHAT_ARGS,ChatRuntime,killTree,permissionResponse,usageFromRateLimit,tran
 
 function fakeChild(){
   const child=new EventEmitter();
-  child.stdout=new PassThrough();child.stderr=new PassThrough();child.stdin=new PassThrough();child.pid=4242;
+  child.stdout=new PassThrough();child.stderr=new PassThrough();child.stdin=new PassThrough();
+  // No pid: stopping must never reach a real process (on Windows it would run taskkill on that pid).
   child.written=[];child.stdin.on('data',d=>{for(const line of String(d).split('\n').filter(Boolean))child.written.push(JSON.parse(line));});
   child.kill=()=>{child.killed=true;setImmediate(()=>child.emit('exit',null,'SIGTERM'));};
   child.say=event=>child.stdout.write(JSON.stringify(event)+'\n');
@@ -159,16 +160,18 @@ test('an approved plan switches the mode, which is logged and reported once',asy
   assert.deepEqual(chat.events.filter(e=>e.type==='wb_mode').map(e=>e.mode),['plan','bypassPermissions']);
 });
 
-test('stopping ends the whole process tree on Windows and signals the CLI elsewhere',async()=>{
-  const signals=[];
-  const unix={pid:4242,kill:s=>signals.push(s)};
-  killTree(unix,'SIGTERM','darwin');
+test('stopping ends the whole process tree on Windows and signals the CLI elsewhere',()=>{
+  const signals=[],runs=[];
+  const fakeRun=(file,args)=>{runs.push([file,...args]);return {on(){return this;}};};
+  killTree({pid:4242,kill:s=>signals.push(s)},'SIGTERM','darwin',fakeRun);
   assert.deepEqual(signals,['SIGTERM']);
-  // On Windows taskkill /t ends claude.exe with its MCP servers and commands; only if taskkill itself
-  // cannot start does it fall back to ending claude.exe alone.
-  const win={pid:999999,kill:()=>signals.push('fallback')};
-  killTree(win,'SIGTERM','win32');
+  assert.equal(runs.length,0);
+  // On Windows taskkill /t ends claude.exe together with its MCP servers and commands.
+  killTree({pid:4242,kill:()=>signals.push('direct')},'SIGTERM','win32',fakeRun);
+  assert.deepEqual(runs,[['taskkill.exe','/pid','4242','/t','/f']]);
   assert.deepEqual(signals,['SIGTERM'],'not killed directly');
-  await new Promise(r=>setTimeout(r,200));
-  if(process.platform!=='win32')assert.deepEqual(signals,['SIGTERM','fallback'],'taskkill missing here, so it falls back');
+  // A process that never started has no pid and no tree.
+  killTree({kill:s=>signals.push('no-pid '+s)},'SIGTERM','win32',fakeRun);
+  assert.deepEqual(signals,['SIGTERM','no-pid SIGTERM']);
+  assert.equal(runs.length,1);
 });

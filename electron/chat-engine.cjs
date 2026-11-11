@@ -130,9 +130,10 @@ function echoKey(content){
 
 // Windows has no signals: kill() ends only claude.exe and would leave its MCP servers and
 // commands running, so the whole process tree is ended there.
-function killTree(child,signal,platform=process.platform){
-  if(!child?.pid)return;
-  if(platform==='win32')spawn('taskkill.exe',['/pid',String(child.pid),'/t','/f'],{windowsHide:true,stdio:'ignore'}).on('error',()=>{try{child.kill();}catch{}});
+// Without a pid the process never started, so there is no tree to end.
+function killTree(child,signal,platform=process.platform,run=spawn){
+  if(!child)return;
+  if(platform==='win32'&&child.pid)run('taskkill.exe',['/pid',String(child.pid),'/t','/f'],{windowsHide:true,stdio:'ignore'}).on('error',()=>{try{child.kill();}catch{}});
   else child.kill(signal);
 }
 
